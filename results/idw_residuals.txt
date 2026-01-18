@@ -1,0 +1,30 @@
+Region 0:
+  Residuals before Local H: max=2.308px
+  Estimated after H (x0.25): max=0.577px
+    Marker 13: 2.308px -> 0.577px
+    Marker 14: 1.419px -> 0.355px
+    Marker 15: 1.104px -> 0.276px
+    Marker 16: 1.129px -> 0.282px
+Region 1:
+  Residuals before Local H: max=1.129px
+  Estimated after H (x0.25): max=0.282px
+    Marker 15: 1.104px -> 0.276px
+    Marker 16: 1.129px -> 0.282px
+    Marker 17: 0.423px -> 0.106px
+    Marker 18: 0.264px -> 0.066px
+  -> Skipped IDW (residuals < 0.5px)
+Region 2:
+  Residuals before Local H: max=2.458px
+  Estimated after H (x0.25): max=0.614px
+    Marker 14: 1.419px -> 0.355px
+    Marker 16: 1.129px -> 0.282px
+    Marker 19: 2.458px -> 0.614px
+    Marker 20: 0.939px -> 0.235px
+Region 3:
+  Residuals before Local H: max=1.129px
+  Estimated after H (x0.25): max=0.282px
+    Marker 16: 1.129px -> 0.282px
+    Marker 18: 0.264px -> 0.066px
+    Marker 20: 0.939px -> 0.235px
+    Marker 21: 0.288px -> 0.072px
+  -> Skipped IDW (residuals < 0.5px)

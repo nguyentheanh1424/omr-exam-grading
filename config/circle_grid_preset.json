@@ -1,0 +1,26 @@
+{
+  "num_questions": 40,
+  "num_cols": 4,
+  "questions_per_col": 10,
+  "options_per_question": 5,
+  "margin_left": 61,
+  "margin_top": 59,
+  "column_width": 288,
+  "column_gap": 53,
+  "row_height": 89,
+  "circle_diameter": 44,
+  "option_gap": 13,
+  "option_left_padding": 10,
+  "col_dx": [
+    710,
+    1167,
+    28,
+    484
+  ],
+  "col_dy": [
+    1117,
+    1115,
+    2206,
+    2206
+  ]
+}
