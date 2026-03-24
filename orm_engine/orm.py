@@ -55,6 +55,10 @@ ABS_TH_MAX = 0.40
 REL_TH_MIN = 0.015
 REL_TH_MAX = 0.25
 
+# Multiple-mark detection tuning
+MULTI_RECOVERY_ABS_RATIO = 0.75
+MULTI_RECOVERY_BEST_RATIO = 0.70
+
 # VISUALIZATION CONSTANTS
 # Circle colors (BGR format)
 COLOR_GRAY = (160, 160, 160)
@@ -97,6 +101,7 @@ class CircleROI:
     r: int
     question: int
     option: int
+    selection_mode: str = "single"
 
     @staticmethod
     def from_dict(d: dict) -> "CircleROI":
@@ -106,6 +111,7 @@ class CircleROI:
             r=int(d["r"]),
             question=int(d["question"]),
             option=int(d["option"]),
+            selection_mode=str(d.get("selection_mode", "single")),
         )
 
 
@@ -120,11 +126,12 @@ class OMRProcessor:
         self,
         circle_rois: List[CircleROI],
         answer_key: List[int],
-        threshold_path: str = "config/omr_thresholds.json",
+        threshold_path: str = "config/omr_bubble_thresholds.json",
         auto_threshold: bool = True,
     ):
         self.circle_rois = circle_rois
         self.answer_key = answer_key
+        self.question_selection_modes = self._build_question_selection_modes(circle_rois)
 
         self.threshold_path = threshold_path
         self.auto_threshold = auto_threshold
@@ -135,11 +142,50 @@ class OMRProcessor:
         if os.path.exists(self.threshold_path):
             self._load_thresholds()
 
+    @staticmethod
+    def _build_question_selection_modes(circle_rois: List[CircleROI]) -> Dict[int, str]:
+        allowed_modes = {"single", "multiple"}
+        modes: Dict[int, str] = {}
+        for roi in circle_rois:
+            mode = str(roi.selection_mode or "single").strip().lower()
+            if mode not in allowed_modes:
+                raise ValueError(
+                    f"unsupported selection_mode '{roi.selection_mode}' for question {roi.question}"
+                )
+            existing = modes.get(roi.question)
+            if existing is not None and existing != mode:
+                raise ValueError(
+                    f"inconsistent selection_mode for question {roi.question}: "
+                    f"'{existing}' vs '{mode}'"
+                )
+            modes[roi.question] = mode
+        return modes
+
     def _load_thresholds(self):
         with open(self.threshold_path, "r", encoding="utf-8") as f:
             d = json.load(f)
         self.abs_th = float(d["abs_th"])
         self.rel_th = float(d["rel_th"])
+
+    @staticmethod
+    def _ensure_gray(img: np.ndarray) -> np.ndarray:
+        if img.ndim == 2:
+            return img
+        if img.ndim == 3 and img.shape[2] == 1:
+            return img[:, :, 0]
+        if img.ndim == 3 and img.shape[2] == 3:
+            return cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        raise ValueError("input image must be grayscale, single-channel, or BGR")
+
+    @staticmethod
+    def _ensure_bgr(img: np.ndarray) -> np.ndarray:
+        if img.ndim == 2:
+            return cv.cvtColor(img, cv.COLOR_GRAY2BGR)
+        if img.ndim == 3 and img.shape[2] == 1:
+            return cv.cvtColor(img[:, :, 0], cv.COLOR_GRAY2BGR)
+        if img.ndim == 3 and img.shape[2] == 3:
+            return img.copy()
+        raise ValueError("input image must be grayscale, single-channel, or BGR")
 
     def _save_thresholds(self):
         with open(self.threshold_path, "w", encoding="utf-8") as f:
@@ -159,7 +205,7 @@ class OMRProcessor:
 
     @staticmethod
     def _prep_gray(img: np.ndarray) -> np.ndarray:
-        gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        gray = OMRProcessor._ensure_gray(img)
         gray = cv.createCLAHE(CLAHE_CLIP_LIMIT, CLAHE_TILE_SIZE).apply(gray)
         gray = cv.GaussianBlur(gray, GAUSSIAN_KERNEL_SIZE, GAUSSIAN_SIGMA)
         return gray
@@ -250,7 +296,7 @@ class OMRProcessor:
     def _detect_answers(
         self,
         score_cache: Dict[Tuple[int, int], float],
-    ) -> List[int]:
+    ) -> Tuple[List[int], List[List[int]], List[str]]:
         by_q: Dict[int, List[Tuple[int, float]]] = {}
         max_q = 0
 
@@ -260,16 +306,74 @@ class OMRProcessor:
             max_q = max(max_q, roi.question)
 
         answers = [-1] * max_q
+        selected_options: List[List[int]] = [[] for _ in range(max_q)]
+        question_statuses = ["blank"] * max_q
 
         for q, items in by_q.items():
             items.sort(key=lambda x: x[1], reverse=True)
-            best_opt, best_val = items[0]
-            second_val = items[1][1] if len(items) > 1 else -1e9
+            filled_options = self._detect_filled_options(items)
+            selection_mode = self.question_selection_modes.get(q, "single")
+            answer, status = self._resolve_question_selection(
+                items,
+                filled_options,
+                selection_mode,
+            )
+            answers[q - 1] = answer
+            selected_options[q - 1] = filled_options
+            question_statuses[q - 1] = status
 
-            if best_val >= self.abs_th and (best_val - second_val) >= self.rel_th:
-                answers[q - 1] = best_opt
+        return answers, selected_options, question_statuses
 
-        return answers
+    def _detect_filled_options(
+        self,
+        sorted_items: List[Tuple[int, float]],
+    ) -> List[int]:
+        if not sorted_items:
+            return []
+
+        recovery_abs_th = max(DEFAULT_ABS_TH, self.abs_th * MULTI_RECOVERY_ABS_RATIO)
+        strict_filled = [opt for opt, value in sorted_items if value >= self.abs_th]
+        if len(strict_filled) >= 2:
+            return sorted(strict_filled)
+
+        best_opt, best_val = sorted_items[0]
+        second_opt, second_val = sorted_items[1] if len(sorted_items) > 1 else (-1, -1e9)
+        soft_filled = [opt for opt, value in sorted_items if value >= recovery_abs_th]
+        recovered_multiple = (
+            len(soft_filled) >= 2 and
+            second_val >= best_val * MULTI_RECOVERY_BEST_RATIO
+        )
+        if recovered_multiple:
+            return sorted(soft_filled[:2])
+
+        if best_val >= self.abs_th:
+            return [best_opt]
+        return []
+
+    def _resolve_question_selection(
+        self,
+        sorted_items: List[Tuple[int, float]],
+        filled_options: List[int],
+        selection_mode: str,
+    ) -> Tuple[int, str]:
+        if not sorted_items:
+            return -1, "blank"
+        if not filled_options:
+            return -1, "blank"
+
+        if selection_mode == "multiple":
+            if len(filled_options) >= 2:
+                return -1, "multiple"
+            return filled_options[0], "single"
+
+        if len(filled_options) >= 2:
+            return -1, "invalid_multiple_on_single"
+
+        best_opt, best_val = sorted_items[0]
+        second_val = sorted_items[1][1] if len(sorted_items) > 1 else -1e9
+        if best_val >= self.abs_th and (best_val - second_val) >= self.rel_th:
+            return best_opt, "single"
+        return -1, "uncertain"
 
     def _grade(self, answers: List[int]) -> Tuple[int, List[bool]]:
         score = 0
@@ -286,13 +390,11 @@ class OMRProcessor:
         img: np.ndarray,
         score_cache: Dict[Tuple[int, int], float],
         answers: List[int],
+        selected_options: List[List[int]],
+        question_statuses: List[str],
     ) -> np.ndarray:
-        vis = img.copy()
+        vis = self._ensure_bgr(img)
         h, w = img.shape[:2]
-
-        by_q: Dict[int, List[Tuple[int, float]]] = {}
-        for (q, opt), s in score_cache.items():
-            by_q.setdefault(q, []).append((opt, s))
 
         for roi in self.circle_rois:
             q_idx = roi.question - 1
@@ -300,25 +402,15 @@ class OMRProcessor:
                 continue
 
             detected = answers[q_idx]
+            status = question_statuses[q_idx]
+            selected = selected_options[q_idx]
             gt = self.answer_key[q_idx] if q_idx < len(self.answer_key) else None
-
-            items = by_q.get(roi.question, [])
-            items_sorted = sorted(items, key=lambda x: x[1], reverse=True)
-
-            best_opt, best_val = items_sorted[0]
-            second_opt, second_val = items_sorted[1] if len(items_sorted) > 1 else (None, -1e9)
-
-            is_multi = (
-                best_val >= self.abs_th and
-                second_val >= self.abs_th and
-                (best_val - second_val) < self.rel_th
-            )
 
             color = COLOR_GRAY
             thick = THICKNESS_NORMAL
 
-            if is_multi:
-                if roi.option == best_opt or roi.option == second_opt:
+            if status in {"multiple", "invalid_multiple_on_single"}:
+                if roi.option in selected:
                     color, thick = COLOR_YELLOW, THICKNESS_HIGHLIGHT
 
             elif detected == -1:
@@ -372,6 +464,9 @@ class OMRProcessor:
     def run(self, a4_img: np.ndarray, output=None, debug=False) -> Dict:
         gray = self._prep_gray(a4_img)
 
+        if debug and not output:
+            raise ValueError("output directory is required when debug=True")
+
         if debug:
             cv.imwrite(f"{output}/omr_1_preprocessed_gray.png", gray)
 
@@ -383,14 +478,14 @@ class OMRProcessor:
         if self.auto_threshold and not os.path.exists(self.threshold_path):
             self._auto_calibrate(score_cache)
 
-        answers = self._detect_answers(score_cache)
+        answers, selected_options, question_statuses = self._detect_answers(score_cache)
         score, per = self._grade(answers)
 
-        vis = self._draw_overlay(a4_img, score_cache, answers)
+        vis = self._draw_overlay(a4_img, score_cache, answers, selected_options, question_statuses)
         vis = self._draw_score(vis, score, len(self.answer_key))
 
         if debug:
-            score_img = a4_img.copy()
+            score_img = self._ensure_bgr(a4_img)
 
             for (q, opt), bubble_score_value in score_cache.items():
                 roi = [r for r in self.circle_rois if r.question == q and r.option == opt][0]
@@ -410,6 +505,12 @@ class OMRProcessor:
 
         return {
             "answers": answers,
+            "selected_options": selected_options,
+            "question_statuses": question_statuses,
+            "question_selection_modes": [
+                self.question_selection_modes.get(question_index + 1, "single")
+                for question_index in range(len(answers))
+            ],
             "score": score,
             "per_correct": per,
             "scored_img": vis,
@@ -418,3 +519,4 @@ class OMRProcessor:
                 "rel_th": self.rel_th,
             },
         }
+

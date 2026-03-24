@@ -3,13 +3,13 @@ import os
 import cv2 as cv
 from .detector import detect_tags
 from .utils import  draw_detections, safe_mkdir
-from .config import TEMPLATE_LAYOUT_FILE
+from .config import TEMPLATE_MARKER_POSITIONS_FILE
 import logging
 
 log = logging.getLogger(__name__)
 
 
-def extract_template(path_img, path_out=TEMPLATE_LAYOUT_FILE, output=None, debug=False):
+def extract_template(path_img, path_out=TEMPLATE_MARKER_POSITIONS_FILE, output=None, debug=False):
     img = cv.imread(path_img)
     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
@@ -29,7 +29,7 @@ def extract_template(path_img, path_out=TEMPLATE_LAYOUT_FILE, output=None, debug
     return layout
 
 
-def load_template(path=TEMPLATE_LAYOUT_FILE):
+def load_template(path=TEMPLATE_MARKER_POSITIONS_FILE):
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return {int(k): v for k, v in data.items()}

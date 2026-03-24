@@ -5,7 +5,7 @@ from pathlib import Path
 
 import cv2 as cv
 
-from native_core.python_adapter import DEFAULT_ANSWER_KEY_JSON, DEFAULT_CIRCLE_ROIS_JSON, load_answer_key
+from native_core.python_adapter import DEFAULT_ANSWER_KEY_JSON, DEFAULT_BUBBLE_LAYOUT_JSON, load_answer_key
 from orm_engine.orm import OMRProcessor, load_circle_rois
 from postprocess_engine.handwritten_review import (
     HandwrittenRegion,
@@ -16,7 +16,7 @@ from postprocess_engine.handwritten_review import (
     merge_handwritten_regions,
     save_handwritten_outputs,
 )
-from warp_engine.config import TEMPLATE_LAYOUT_FILE
+from warp_engine.config import TEMPLATE_MARKER_POSITIONS_FILE
 from warp_engine.engine import WarpEngine
 
 
@@ -48,7 +48,7 @@ def main() -> None:
     image_path = input_arg if input_arg.is_absolute() else REPO_ROOT / input_arg
     output_dir = output_arg if output_arg.is_absolute() else REPO_ROOT / output_arg
 
-    warp_engine = WarpEngine(str(REPO_ROOT / TEMPLATE_LAYOUT_FILE), str(DEFAULT_TEMPLATE_IMAGE))
+    warp_engine = WarpEngine(str(REPO_ROOT / TEMPLATE_MARKER_POSITIONS_FILE), str(DEFAULT_TEMPLATE_IMAGE))
     raw = cv.imread(str(image_path), cv.IMREAD_COLOR)
     if raw is None:
         raise FileNotFoundError(image_path)
@@ -61,7 +61,7 @@ def main() -> None:
         debug=False,
     )
 
-    circle_rois = load_circle_rois(str(REPO_ROOT / DEFAULT_CIRCLE_ROIS_JSON))
+    circle_rois = load_circle_rois(str(REPO_ROOT / DEFAULT_BUBBLE_LAYOUT_JSON))
     answer_key = load_answer_key(
         REPO_ROOT / DEFAULT_ANSWER_KEY_JSON,
         fallback_question_count=max(roi.question for roi in circle_rois),

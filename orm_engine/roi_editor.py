@@ -330,7 +330,7 @@ class CircleGridEditorApp:
 
     def _save_preset(self):
         path = filedialog.asksaveasfilename(title="Save Preset (JSON)", defaultextension=".json",
-                                            filetypes=[("JSON", "*.json")], initialfile="circle_grid_preset.json")
+                                            filetypes=[("JSON", "*.json")], initialfile="omr_bubble_grid_template.json")
         if not path:
             return
         try:
@@ -343,7 +343,7 @@ class CircleGridEditorApp:
     def _export_circles(self):
         rois = build_circle_grid(self.img_w, self.img_h, self.params)
         path = filedialog.asksaveasfilename(title="Export Circles JSON", defaultextension=".json",
-                                            initialfile="circle_rois.json", filetypes=[("JSON", "*.json")])
+                                            initialfile="omr_bubble_layout.json", filetypes=[("JSON", "*.json")])
         if not path:
             return
         try:

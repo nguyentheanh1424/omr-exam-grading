@@ -9,7 +9,7 @@ import cv2 as cv
 from native_core.native_api import NativeCoreClient, read_image
 from native_core.python_adapter import (
     DEFAULT_ANSWER_KEY_JSON,
-    DEFAULT_CIRCLE_ROIS_JSON,
+    DEFAULT_BUBBLE_LAYOUT_JSON,
     build_native_adapter_config,
     load_answer_key,
     load_threshold_config,
@@ -37,7 +37,7 @@ from postprocess_engine.output_artifacts import (
     save_image_if_enabled,
     save_json_if_enabled,
 )
-from warp_engine.config import TEMPLATE_LAYOUT_FILE
+from warp_engine.config import TEMPLATE_MARKER_POSITIONS_FILE
 from warp_engine.detector import detect_tags
 from warp_engine.engine import WarpEngine
 
@@ -138,7 +138,7 @@ def main() -> None:
         field_path = field_arg if field_arg.is_absolute() else REPO_ROOT / field_arg
         bubble_field_configs = load_bubble_field_configs(field_path)
     if args.python_warp_first or args.with_handwritten_review or args.with_id_values or output_config.handwritten_review.enabled or output_config.bubble_fields.enabled:
-        warp_engine = WarpEngine(str(REPO_ROOT / TEMPLATE_LAYOUT_FILE), str(DEFAULT_TEMPLATE_IMAGE))
+        warp_engine = WarpEngine(str(REPO_ROOT / TEMPLATE_MARKER_POSITIONS_FILE), str(DEFAULT_TEMPLATE_IMAGE))
         handwritten_artifacts = warp_engine.warp_with_artifacts(
             raw_img,
             output=None,
@@ -150,7 +150,7 @@ def main() -> None:
         img = handwritten_artifacts.template_merged_img.copy()
         effective_mode = "aligned"
     if args.python_prep_gray_first:
-        circle_rois = load_circle_rois(DEFAULT_CIRCLE_ROIS_JSON)
+        circle_rois = load_circle_rois(DEFAULT_BUBBLE_LAYOUT_JSON)
         answer_key = load_answer_key(
             DEFAULT_ANSWER_KEY_JSON,
             fallback_question_count=max(roi.question for roi in circle_rois),

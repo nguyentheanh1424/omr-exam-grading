@@ -6,7 +6,7 @@ import time
 
 import cv2 as cv
 
-from warp_engine.config import TEMPLATE_LAYOUT_FILE, A4_PX
+from warp_engine.config import TEMPLATE_MARKER_POSITIONS_FILE, A4_PX
 from warp_engine.engine import WarpEngine
 from warp_engine.template import extract_template
 from warp_engine.utils import safe_mkdir
@@ -30,7 +30,7 @@ TEMPLATE_IMAGE = "samples/template_scan1.png"    # ảnh template
 OUTPUT = "results"
 DEBUG_MODE = True
 
-CIRCLE_ROIS_JSON = "config/circle_rois.json"
+BUBBLE_LAYOUT_JSON = "config/omr_bubble_layout.json"
 ANSWER_KEY_JSON = "config/answer_key.json"
 ID_BUBBLE_FIELDS_JSON = "config/id_bubble_fields.json"
 OUTPUT_CONFIG_JSON = "config/pipeline_outputs.json"
@@ -54,21 +54,21 @@ def main():
     if not USE_EXISTING_TEMPLATE:
         extract_template(
             TEMPLATE_IMAGE,
-            TEMPLATE_LAYOUT_FILE,
+            TEMPLATE_MARKER_POSITIONS_FILE,
             OUTPUT,
             output_config.debug_intermediate
         )
     else:
-        if not os.path.exists(TEMPLATE_LAYOUT_FILE):
+        if not os.path.exists(TEMPLATE_MARKER_POSITIONS_FILE):
             raise FileNotFoundError(
-                f"Không tìm thấy {TEMPLATE_LAYOUT_FILE}. "
+                f"Không tìm thấy {TEMPLATE_MARKER_POSITIONS_FILE}. "
                 f"Bạn cần đặt USE_EXISTING_TEMPLATE=False để extract."
             )
     log_time("Extract template", t)
 
     t = time.perf_counter()
     warp_engine = WarpEngine(
-        TEMPLATE_LAYOUT_FILE,
+        TEMPLATE_MARKER_POSITIONS_FILE,
         TEMPLATE_IMAGE,
     )
     log_time("Init WarpEngine", t)
@@ -91,7 +91,7 @@ def main():
     log_time("Warp to A4", t)
 
     t = time.perf_counter()
-    circle_rois = load_circle_rois(CIRCLE_ROIS_JSON)
+    circle_rois = load_circle_rois(BUBBLE_LAYOUT_JSON)
     log_time("Load circle ROIs", t)
 
     t = time.perf_counter()
@@ -163,6 +163,37 @@ def main():
 
     t = time.perf_counter()
     answers = [int(x) for x in omr_result["answers"]]
+    selected_options = [
+        [int(option) for option in options]
+        for options in omr_result.get("selected_options", [])
+    ]
+    question_statuses = list(omr_result.get("question_statuses", []))
+    question_selection_modes = list(omr_result.get("question_selection_modes", []))
+    multiple_questions = [
+        index + 1
+        for index, status in enumerate(question_statuses)
+        if status == "multiple"
+    ]
+    invalid_multiple_on_single_questions = [
+        index + 1
+        for index, status in enumerate(question_statuses)
+        if status == "invalid_multiple_on_single"
+    ]
+    uncertain_questions = [
+        index + 1
+        for index, status in enumerate(question_statuses)
+        if status == "uncertain"
+    ]
+    blank_questions = [
+        index + 1
+        for index, status in enumerate(question_statuses)
+        if status == "blank"
+    ]
+    single_questions = [
+        index + 1
+        for index, status in enumerate(question_statuses)
+        if status == "single"
+    ]
     graded_questions = sum(1 for gt in answer_key if gt >= 0)
     score = sum(
         1
@@ -176,6 +207,21 @@ def main():
         "graded_questions": graded_questions,
         "total_questions": len(answer_key),
         "answers": answers,
+        "selected_options": selected_options,
+        "question_statuses": question_statuses,
+        "question_selection_modes": question_selection_modes,
+        "multiple_questions": multiple_questions,
+        "invalid_multiple_on_single_questions": invalid_multiple_on_single_questions,
+        "uncertain_questions": uncertain_questions,
+        "blank_questions": blank_questions,
+        "single_questions": single_questions,
+        "status_counts": {
+            "single": len(single_questions),
+            "multiple": len(multiple_questions),
+            "invalid_multiple_on_single": len(invalid_multiple_on_single_questions),
+            "uncertain": len(uncertain_questions),
+            "blank": len(blank_questions),
+        },
         "student_id": student_id,
         "quiz_id": quiz_id,
         "thresholds": {
@@ -202,3 +248,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

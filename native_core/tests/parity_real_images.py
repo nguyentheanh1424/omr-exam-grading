@@ -9,13 +9,13 @@ import cv2 as cv
 from native_core.native_api import NativeCoreClient, read_image
 from native_core.python_adapter import (
     DEFAULT_ANSWER_KEY_JSON,
-    DEFAULT_CIRCLE_ROIS_JSON,
+    DEFAULT_BUBBLE_LAYOUT_JSON,
     build_native_adapter_config,
     load_answer_key,
     load_threshold_config,
 )
 from orm_engine.orm import OMRProcessor, load_circle_rois
-from warp_engine.config import TEMPLATE_LAYOUT_FILE
+from warp_engine.config import TEMPLATE_MARKER_POSITIONS_FILE
 from warp_engine.engine import WarpEngine
 
 
@@ -26,12 +26,12 @@ TEMPLATE_IMAGE = REPO_ROOT / "samples" / "template_scan1.png"
 
 
 def build_python_pipeline() -> tuple[WarpEngine, OMRProcessor]:
-    circle_rois = load_circle_rois(str(REPO_ROOT / DEFAULT_CIRCLE_ROIS_JSON))
+    circle_rois = load_circle_rois(str(REPO_ROOT / DEFAULT_BUBBLE_LAYOUT_JSON))
     answer_key = load_answer_key(
         REPO_ROOT / DEFAULT_ANSWER_KEY_JSON,
         fallback_question_count=max(roi.question for roi in circle_rois),
     )
-    warp_engine = WarpEngine(str(REPO_ROOT / TEMPLATE_LAYOUT_FILE), str(TEMPLATE_IMAGE))
+    warp_engine = WarpEngine(str(REPO_ROOT / TEMPLATE_MARKER_POSITIONS_FILE), str(TEMPLATE_IMAGE))
     omr = OMRProcessor(
         circle_rois=circle_rois,
         answer_key=answer_key,
@@ -166,3 +166,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

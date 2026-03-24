@@ -4,7 +4,7 @@ APRILTAG_DICT = cv.aruco.DICT_APRILTAG_16h5
 
 A4_PX = (2481, 3509)
 
-TEMPLATE_LAYOUT_FILE = "config/template_marker_layout.json"
+TEMPLATE_MARKER_POSITIONS_FILE = "config/template_marker_positions.json"
 
 WINDOWS_4PTS = [
     [13, 14, 15, 16],

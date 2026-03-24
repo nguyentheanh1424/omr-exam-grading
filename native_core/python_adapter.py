@@ -6,12 +6,12 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from orm_engine.orm import CircleROI, load_circle_rois
-from warp_engine.config import A4_PX, TEMPLATE_LAYOUT_FILE, WINDOWS_4PTS
+from warp_engine.config import A4_PX, TEMPLATE_MARKER_POSITIONS_FILE, WINDOWS_4PTS
 
 
-DEFAULT_CIRCLE_ROIS_JSON = "config/circle_rois.json"
+DEFAULT_BUBBLE_LAYOUT_JSON = "config/omr_bubble_layout.json"
 DEFAULT_ANSWER_KEY_JSON = "config/answer_key.json"
-DEFAULT_THRESHOLDS_JSON = "config/omr_thresholds.json"
+DEFAULT_BUBBLE_THRESHOLDS_JSON = "config/omr_bubble_thresholds.json"
 
 
 @dataclass(frozen=True)
@@ -71,7 +71,7 @@ def _load_json(path: str | Path):
         return json.load(handle)
 
 
-def load_template_markers(path: str | Path = TEMPLATE_LAYOUT_FILE) -> tuple[NativeMarkerTemplate, ...]:
+def load_template_markers(path: str | Path = TEMPLATE_MARKER_POSITIONS_FILE) -> tuple[NativeMarkerTemplate, ...]:
     data = _load_json(path)
     if not isinstance(data, dict) or not data:
         raise ValueError("template marker layout must be a non-empty object")
@@ -135,7 +135,7 @@ def load_answer_key(
 
 
 def load_threshold_config(
-    path: str | Path = DEFAULT_THRESHOLDS_JSON,
+    path: str | Path = DEFAULT_BUBBLE_THRESHOLDS_JSON,
     *,
     auto_threshold_when_missing: bool = True,
 ) -> NativeThresholdConfig:
@@ -234,9 +234,9 @@ def normalize_answer_key(
 
 def build_native_adapter_config(
     *,
-    circle_rois_path: str | Path = DEFAULT_CIRCLE_ROIS_JSON,
+    circle_rois_path: str | Path = DEFAULT_BUBBLE_LAYOUT_JSON,
     answer_key_path: str | Path = DEFAULT_ANSWER_KEY_JSON,
-    template_layout_path: str | Path = TEMPLATE_LAYOUT_FILE,
+    template_layout_path: str | Path = TEMPLATE_MARKER_POSITIONS_FILE,
     output_size: tuple[int, int] = A4_PX,
     windows_4pts: Iterable[Sequence[int]] = WINDOWS_4PTS,
 ) -> NativeAdapterConfig:
