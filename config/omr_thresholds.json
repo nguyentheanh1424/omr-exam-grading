@@ -1,9 +1,9 @@
 {
-  "abs_th": 0.15840201079845428,
-  "rel_th": 0.03540120646357536,
+  "abs_th": 0.20000000298023224,
+  "rel_th": 0.05549980327486992,
   "meta": {
     "method": "annulus_patch_darkness",
-    "r_in_ratio": 0.55,
-    "r_out_ratio": 0.9
+    "r_in_ratio": 0.45,
+    "r_out_ratio": 0.85
   }
 }

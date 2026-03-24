@@ -7,7 +7,7 @@ from .refine_idw_patch import refine_idw_patch
 from .binarize import binarize_patch_dual
 
 
-def bbox_from_template(ids, layout, img_shape, margin=10):
+def bbox_from_template(ids, layout, img_shape, margin=100):
     H, W = img_shape[:2]
     xs, ys = [], []
 
@@ -103,7 +103,7 @@ def refine_regions(template_img, layout, warped_src, windows=WINDOWS_4PTS, outpu
                 src_local=src_estimated_after_H,
                 dst_local=dst_local,
                 grid_shape=(24, 24),
-                idw_power=2.5,
+                idw_power=3.0,
             )
 
         base_patch = base[y0:y1, x0:x1]

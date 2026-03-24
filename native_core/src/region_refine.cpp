@@ -1,4 +1,5 @@
 #include "region_refine.h"
+#include "marker_detect.h"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,8 @@
 namespace omr_region {
 
 namespace {
+
+constexpr float kMaxTrustedLocalMarkerDeltaPx = 24.0f;
 
 struct Pt2 {
     float x;
@@ -247,6 +250,89 @@ float choose_residual_factor(const OMR_WarpParams& p, float max_residual) {
     return p.residual_factors[0];
 }
 
+uint8_t gray_from_patch_pixel(
+    const std::vector<uint8_t>& patch,
+    int pw,
+    int channels,
+    int x,
+    int y
+) {
+    const size_t base =
+        static_cast<size_t>(y) * static_cast<size_t>(pw) * static_cast<size_t>(channels) +
+        static_cast<size_t>(x) * static_cast<size_t>(channels);
+    if (channels <= 1) {
+        return patch[base];
+    }
+    const float b = static_cast<float>(patch[base + 0]);
+    const float g = static_cast<float>(patch[base + 1]);
+    const float r = static_cast<float>(patch[base + 2]);
+    const float gray = 0.114f * b + 0.587f * g + 0.299f * r;
+    return static_cast<uint8_t>(std::round(std::clamp(gray, 0.0f, 255.0f)));
+}
+
+uint8_t percentile_u8(std::vector<uint8_t> values, float percentile) {
+    if (values.empty()) {
+        return 255u;
+    }
+    const float clamped = std::clamp(percentile, 0.0f, 100.0f);
+    const size_t idx = static_cast<size_t>(
+        (clamped / 100.0f) * static_cast<float>(values.size() - 1)
+    );
+    std::nth_element(values.begin(), values.begin() + static_cast<ptrdiff_t>(idx), values.end());
+    return values[idx];
+}
+
+void erode_cross_mask(std::vector<uint8_t>* mask, int pw, int ph, int iterations) {
+    if (mask == nullptr || iterations <= 0) {
+        return;
+    }
+    for (int iter = 0; iter < iterations; ++iter) {
+        std::vector<uint8_t> prev = *mask;
+        for (int y = 0; y < ph; ++y) {
+            for (int x = 0; x < pw; ++x) {
+                const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(pw) + static_cast<size_t>(x);
+                if (prev[idx] == 0u) {
+                    (*mask)[idx] = 0u;
+                    continue;
+                }
+                const bool keep =
+                    x > 0 && x + 1 < pw &&
+                    y > 0 && y + 1 < ph &&
+                    prev[idx - 1] != 0u &&
+                    prev[idx + 1] != 0u &&
+                    prev[idx - static_cast<size_t>(pw)] != 0u &&
+                    prev[idx + static_cast<size_t>(pw)] != 0u;
+                (*mask)[idx] = keep ? 255u : 0u;
+            }
+        }
+    }
+}
+
+std::vector<uint8_t> binarize_patch_dual_like_python(
+    const std::vector<uint8_t>& patch,
+    int pw,
+    int ph,
+    int channels,
+    const OMR_BinarizeParams& bin_params
+) {
+    std::vector<uint8_t> gray(static_cast<size_t>(pw) * static_cast<size_t>(ph), 255u);
+    for (int y = 0; y < ph; ++y) {
+        for (int x = 0; x < pw; ++x) {
+            gray[static_cast<size_t>(y) * static_cast<size_t>(pw) + static_cast<size_t>(x)] =
+                gray_from_patch_pixel(patch, pw, channels, x, y);
+        }
+    }
+
+    const uint8_t fill_th = percentile_u8(gray, bin_params.fill_percentile);
+    std::vector<uint8_t> mask(static_cast<size_t>(pw) * static_cast<size_t>(ph), 0u);
+    for (size_t i = 0; i < gray.size(); ++i) {
+        mask[i] = (gray[i] < fill_th) ? 255u : 0u;
+    }
+
+    erode_cross_mask(&mask, pw, ph, std::max(0, bin_params.thin_iterations));
+    return mask;
+}
+
 void warp_patch(
     const OMR_ImageView& src,
     int x0,
@@ -378,6 +464,7 @@ bool refine_regions_local(
     const OMR_ImageView& warped,
     const OMR_FormSpec& form,
     const OMR_WarpParams& params,
+    const OMR_BinarizeParams& bin_params,
     const float h_src_to_dst[9],
     std::vector<uint8_t>* out_storage,
     OMR_ImageView* out_view,
@@ -419,21 +506,38 @@ bool refine_regions_local(
         src_after_global[dm.id] = apply_h(h_src_to_dst, Pt2{dm.x, dm.y});
     }
 
+    std::unordered_map<int32_t, Pt2> src_after_local_detect;
+    {
+        std::vector<OMR_DetectedMarker> warped_detected;
+        char detect_err[OMR_ERROR_MESSAGE_CAPACITY] = {0};
+        if (omr_marker::detect_markers_v1(
+                warped,
+                form.template_markers,
+                form.n_template_markers,
+                &warped_detected,
+                detect_err,
+                sizeof(detect_err))) {
+            src_after_local_detect.reserve(warped_detected.size());
+            for (const OMR_DetectedMarker& dm : warped_detected) {
+                src_after_local_detect[dm.id] = Pt2{dm.x, dm.y};
+            }
+        }
+    }
+
     for (int32_t wi = 0; wi < form.n_region_windows; ++wi) {
         const OMR_RegionWindow& win = form.region_windows[wi];
-        std::vector<int32_t> ids;
-        ids.reserve(static_cast<size_t>(win.n_marker_ids));
+        std::vector<int32_t> usable_ids;
+        usable_ids.reserve(static_cast<size_t>(win.n_marker_ids));
         for (int32_t k = 0; k < win.n_marker_ids; ++k) {
             const int32_t id = win.marker_ids[k];
             if (template_map.find(id) == template_map.end()) {
                 continue;
             }
-            if (src_after_global.find(id) == src_after_global.end()) {
-                continue;
+            if (src_after_global.find(id) != src_after_global.end()) {
+                usable_ids.push_back(id);
             }
-            ids.push_back(id);
         }
-        if (ids.size() < 4) {
+        if (usable_ids.size() < 4) {
             continue;
         }
 
@@ -441,7 +545,7 @@ bool refine_regions_local(
         float min_y = std::numeric_limits<float>::max();
         float max_x = -std::numeric_limits<float>::max();
         float max_y = -std::numeric_limits<float>::max();
-        for (int32_t id : ids) {
+        for (int32_t id : usable_ids) {
             const Pt2 p = template_map[id];
             min_x = std::min(min_x, p.x);
             min_y = std::min(min_y, p.y);
@@ -452,8 +556,8 @@ bool refine_regions_local(
         const int margin = std::max(0, params.region_bbox_margin_px);
         const int x0 = std::max(0, static_cast<int>(std::floor(min_x)) - margin);
         const int y0 = std::max(0, static_cast<int>(std::floor(min_y)) - margin);
-        const int x1 = std::min(work.width, static_cast<int>(std::ceil(max_x)) + margin);
-        const int y1 = std::min(work.height, static_cast<int>(std::ceil(max_y)) + margin);
+        const int x1 = std::min(warped.width, static_cast<int>(std::ceil(max_x)) + margin);
+        const int y1 = std::min(warped.height, static_cast<int>(std::ceil(max_y)) + margin);
         const int pw = x1 - x0;
         const int ph = y1 - y0;
         if (pw <= 2 || ph <= 2) {
@@ -462,10 +566,20 @@ bool refine_regions_local(
 
         std::vector<Pt2> src_local;
         std::vector<Pt2> dst_local;
-        src_local.reserve(ids.size());
-        dst_local.reserve(ids.size());
-        for (int32_t id : ids) {
-            const Pt2 s = src_after_global[id];
+        src_local.reserve(usable_ids.size());
+        dst_local.reserve(usable_ids.size());
+        for (int32_t id : usable_ids) {
+            const Pt2 global_s = src_after_global[id];
+            const auto local_it = src_after_local_detect.find(id);
+            Pt2 s = global_s;
+            if (local_it != src_after_local_detect.end()) {
+                const float dx = local_it->second.x - global_s.x;
+                const float dy = local_it->second.y - global_s.y;
+                const float dist = std::sqrt(dx * dx + dy * dy);
+                if (dist <= kMaxTrustedLocalMarkerDeltaPx) {
+                    s = local_it->second;
+                }
+            }
             const Pt2 d = template_map[id];
             src_local.push_back(Pt2{s.x - static_cast<float>(x0), s.y - static_cast<float>(y0)});
             dst_local.push_back(Pt2{d.x - static_cast<float>(x0), d.y - static_cast<float>(y0)});
@@ -477,7 +591,7 @@ bool refine_regions_local(
         }
 
         std::vector<uint8_t> patch_h;
-        warp_patch(work, x0, y0, pw, ph, h_local, &patch_h);
+        warp_patch(warped, x0, y0, pw, ph, h_local, &patch_h);
 
         std::vector<Pt2> src_est_after_h = dst_local;
         float max_res_before = 0.0f;
@@ -515,17 +629,21 @@ bool refine_regions_local(
             );
         }
 
+        const std::vector<uint8_t> ink_mask =
+            binarize_patch_dual_like_python(patch_refined, pw, ph, work.channels, bin_params);
+
         for (int y = 0; y < ph; ++y) {
             uint8_t* dst_row = out_storage->data() +
                 static_cast<size_t>(y0 + y) * static_cast<size_t>(work.stride) +
                 static_cast<size_t>(x0) * static_cast<size_t>(work.channels);
-            const uint8_t* src_row = patch_refined.data() +
-                static_cast<size_t>(y) * static_cast<size_t>(pw) * static_cast<size_t>(work.channels);
-            std::copy(
-                src_row,
-                src_row + static_cast<size_t>(pw) * static_cast<size_t>(work.channels),
-                dst_row
-            );
+            for (int x = 0; x < pw; ++x) {
+                const bool is_ink =
+                    ink_mask[static_cast<size_t>(y) * static_cast<size_t>(pw) + static_cast<size_t>(x)] != 0u;
+                for (int c = 0; c < work.channels; ++c) {
+                    dst_row[static_cast<size_t>(x) * static_cast<size_t>(work.channels) + static_cast<size_t>(c)] =
+                        is_ink ? 0u : 255u;
+                }
+            }
         }
     }
 
