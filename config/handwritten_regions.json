@@ -2,7 +2,12 @@
   {
     "id": "name_line",
     "label": "Name",
-    "rect": [660, 345, 1215, 425],
+    "rect": [
+      660,
+      322,
+      1215,
+      402
+    ],
     "padding_px": 10,
     "merge_mode": "replace_rect",
     "save_patch": true
@@ -10,7 +15,12 @@
   {
     "id": "quiz_line",
     "label": "Quiz",
-    "rect": [660, 510, 1215, 590],
+    "rect": [
+      660,
+      450,
+      1215,
+      530
+    ],
     "padding_px": 10,
     "merge_mode": "replace_rect",
     "save_patch": true
@@ -18,7 +28,12 @@
   {
     "id": "class_line",
     "label": "Class",
-    "rect": [660, 675, 1215, 755],
+    "rect": [
+      657,
+      580,
+      1212,
+      660
+    ],
     "padding_px": 10,
     "merge_mode": "replace_rect",
     "save_patch": true
@@ -26,7 +41,12 @@
   {
     "id": "score_line",
     "label": "Score",
-    "rect": [660, 835, 1215, 915],
+    "rect": [
+      660,
+      709,
+      1215,
+      789
+    ],
     "padding_px": 10,
     "merge_mode": "replace_rect",
     "save_patch": true

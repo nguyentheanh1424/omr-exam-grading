@@ -8,7 +8,7 @@
     "values_json": true
   },
   "handwritten_review": {
-    "enabled": false,
+    "enabled": true,
     "save_patches": true,
     "save_merged_template": true,
     "save_ink_mask": true,
