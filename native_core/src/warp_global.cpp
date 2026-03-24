@@ -5,8 +5,10 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <limits>
 #include <random>
+#include <sstream>
 #include <unordered_map>
 #include <vector>
 
@@ -20,9 +22,77 @@ struct Pt2 {
 };
 
 struct Corr {
+    int32_t id;
     Pt2 src;
     Pt2 dst;
 };
+
+bool invert_3x3(const float m[9], float out_inv[9]);
+
+bool compute_normalization_transform(
+    const std::vector<Pt2>& points,
+    float out_t[9],
+    std::vector<Pt2>* out_normalized
+) {
+    if (out_t == nullptr || out_normalized == nullptr || points.empty()) {
+        return false;
+    }
+
+    double mean_x = 0.0;
+    double mean_y = 0.0;
+    for (const Pt2& p : points) {
+        mean_x += static_cast<double>(p.x);
+        mean_y += static_cast<double>(p.y);
+    }
+    mean_x /= static_cast<double>(points.size());
+    mean_y /= static_cast<double>(points.size());
+
+    double mean_dist = 0.0;
+    for (const Pt2& p : points) {
+        const double dx = static_cast<double>(p.x) - mean_x;
+        const double dy = static_cast<double>(p.y) - mean_y;
+        mean_dist += std::sqrt(dx * dx + dy * dy);
+    }
+    mean_dist /= static_cast<double>(points.size());
+    if (mean_dist < 1e-9) {
+        return false;
+    }
+
+    const double scale = std::sqrt(2.0) / mean_dist;
+    out_t[0] = static_cast<float>(scale);
+    out_t[1] = 0.0f;
+    out_t[2] = static_cast<float>(-scale * mean_x);
+    out_t[3] = 0.0f;
+    out_t[4] = static_cast<float>(scale);
+    out_t[5] = static_cast<float>(-scale * mean_y);
+    out_t[6] = 0.0f;
+    out_t[7] = 0.0f;
+    out_t[8] = 1.0f;
+
+    out_normalized->clear();
+    out_normalized->reserve(points.size());
+    for (const Pt2& p : points) {
+        out_normalized->push_back(
+            Pt2{
+                static_cast<float>(scale * (static_cast<double>(p.x) - mean_x)),
+                static_cast<float>(scale * (static_cast<double>(p.y) - mean_y)),
+            }
+        );
+    }
+    return true;
+}
+
+void multiply_3x3(const float a[9], const float b[9], float out[9]) {
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            double v = 0.0;
+            for (int k = 0; k < 3; ++k) {
+                v += static_cast<double>(a[r * 3 + k]) * static_cast<double>(b[k * 3 + c]);
+            }
+            out[r * 3 + c] = static_cast<float>(v);
+        }
+    }
+}
 
 bool solve_linear_system(
     std::vector<double>* a,
@@ -104,6 +174,27 @@ bool estimate_homography_from_corrs(
         return false;
     }
 
+    std::vector<Pt2> src_points;
+    std::vector<Pt2> dst_points;
+    src_points.reserve(static_cast<size_t>(n));
+    dst_points.reserve(static_cast<size_t>(n));
+    for (int k = 0; k < n; ++k) {
+        const Corr& c = (subset_idx == nullptr) ?
+            corrs[static_cast<size_t>(k)] :
+            corrs[static_cast<size_t>((*subset_idx)[static_cast<size_t>(k)])];
+        src_points.push_back(c.src);
+        dst_points.push_back(c.dst);
+    }
+
+    std::vector<Pt2> src_norm;
+    std::vector<Pt2> dst_norm;
+    float t_src[9] = {0.0f};
+    float t_dst[9] = {0.0f};
+    if (!compute_normalization_transform(src_points, t_src, &src_norm) ||
+        !compute_normalization_transform(dst_points, t_dst, &dst_norm)) {
+        return false;
+    }
+
     std::vector<double> ata(64, 0.0);
     std::vector<double> atb(8, 0.0);
 
@@ -118,14 +209,10 @@ bool estimate_homography_from_corrs(
     };
 
     for (int k = 0; k < n; ++k) {
-        const Corr& c = (subset_idx == nullptr) ?
-            corrs[static_cast<size_t>(k)] :
-            corrs[static_cast<size_t>((*subset_idx)[static_cast<size_t>(k)])];
-
-        const double x = static_cast<double>(c.src.x);
-        const double y = static_cast<double>(c.src.y);
-        const double u = static_cast<double>(c.dst.x);
-        const double v = static_cast<double>(c.dst.y);
+        const double x = static_cast<double>(src_norm[static_cast<size_t>(k)].x);
+        const double y = static_cast<double>(src_norm[static_cast<size_t>(k)].y);
+        const double u = static_cast<double>(dst_norm[static_cast<size_t>(k)].x);
+        const double v = static_cast<double>(dst_norm[static_cast<size_t>(k)].y);
 
         const std::array<double, 8> r1 = {x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y};
         const std::array<double, 8> r2 = {0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y};
@@ -138,15 +225,33 @@ bool estimate_homography_from_corrs(
         return false;
     }
 
-    out_h[0] = static_cast<float>(x[0]);
-    out_h[1] = static_cast<float>(x[1]);
-    out_h[2] = static_cast<float>(x[2]);
-    out_h[3] = static_cast<float>(x[3]);
-    out_h[4] = static_cast<float>(x[4]);
-    out_h[5] = static_cast<float>(x[5]);
-    out_h[6] = static_cast<float>(x[6]);
-    out_h[7] = static_cast<float>(x[7]);
-    out_h[8] = 1.0f;
+    float h_norm[9] = {
+        static_cast<float>(x[0]),
+        static_cast<float>(x[1]),
+        static_cast<float>(x[2]),
+        static_cast<float>(x[3]),
+        static_cast<float>(x[4]),
+        static_cast<float>(x[5]),
+        static_cast<float>(x[6]),
+        static_cast<float>(x[7]),
+        1.0f,
+    };
+
+    float t_dst_inv[9] = {0.0f};
+    if (!invert_3x3(t_dst, t_dst_inv)) {
+        return false;
+    }
+    float tmp[9] = {0.0f};
+    multiply_3x3(t_dst_inv, h_norm, tmp);
+    multiply_3x3(tmp, t_src, out_h);
+
+    if (std::abs(out_h[8]) < 1e-9f) {
+        return false;
+    }
+    const float s = 1.0f / out_h[8];
+    for (int i = 0; i < 9; ++i) {
+        out_h[i] *= s;
+    }
     return true;
 }
 
@@ -201,6 +306,33 @@ void copy_error(char* dst, size_t cap, const char* msg) {
     std::snprintf(dst, cap, "%s", (msg == nullptr) ? "" : msg);
 }
 
+std::vector<float> compute_reprojection_errors(
+    const std::vector<Corr>& corrs,
+    const float h[9]
+) {
+    std::vector<float> errors;
+    errors.reserve(corrs.size());
+    for (const Corr& corr : corrs) {
+        const Pt2 p = apply_h(h, corr.src);
+        if (!std::isfinite(p.x) || !std::isfinite(p.y)) {
+            errors.push_back(std::numeric_limits<float>::infinity());
+            continue;
+        }
+        const float dx = p.x - corr.dst.x;
+        const float dy = p.y - corr.dst.y;
+        errors.push_back(std::sqrt(dx * dx + dy * dy));
+    }
+    return errors;
+}
+
+float median_error(std::vector<float> errors) {
+    if (errors.empty()) {
+        return std::numeric_limits<float>::infinity();
+    }
+    std::sort(errors.begin(), errors.end());
+    return errors[errors.size() / 2];
+}
+
 }  // namespace
 
 bool compute_global_h_from_markers(
@@ -208,7 +340,8 @@ bool compute_global_h_from_markers(
     float ransac_thresh_px,
     int ransac_iterations,
     float out_h[9],
-    int32_t* out_inliers
+    int32_t* out_inliers,
+    int32_t debug_level
 ) {
     if (out_h == nullptr) {
         return false;
@@ -235,6 +368,7 @@ bool compute_global_h_from_markers(
             continue;
         }
         Corr c{};
+        c.id = form.detected_markers[i].id;
         c.src = Pt2{form.detected_markers[i].x, form.detected_markers[i].y};
         c.dst = it->second;
         corrs.push_back(c);
@@ -302,12 +436,74 @@ bool compute_global_h_from_markers(
         return false;
     }
 
-    if (!estimate_homography_from_corrs(corrs, &best_set, out_h)) {
-        std::copy(best_h, best_h + 9, out_h);
+    float ransac_refit_h[9] = {0.0f};
+    bool has_ransac_refit = estimate_homography_from_corrs(corrs, &best_set, ransac_refit_h);
+    if (!has_ransac_refit) {
+        std::copy(best_h, best_h + 9, ransac_refit_h);
+        has_ransac_refit = true;
     }
+
+    float all_corr_h[9] = {0.0f};
+    const bool has_all_corr = estimate_homography_from_corrs(corrs, nullptr, all_corr_h);
+
+    float chosen_h[9] = {0.0f};
+    std::copy(ransac_refit_h, ransac_refit_h + 9, chosen_h);
+    const float ransac_median = median_error(compute_reprojection_errors(corrs, ransac_refit_h));
+    float all_median = std::numeric_limits<float>::infinity();
+    if (has_all_corr) {
+        all_median = median_error(compute_reprojection_errors(corrs, all_corr_h));
+        if (all_median < ransac_median) {
+            std::copy(all_corr_h, all_corr_h + 9, chosen_h);
+        }
+    }
+    std::copy(chosen_h, chosen_h + 9, out_h);
 
     if (out_inliers != nullptr) {
         *out_inliers = static_cast<int32_t>(best_inliers);
+    }
+
+    if (debug_level > 0) {
+        std::ostringstream json;
+        json << "{\n";
+        json << "  \"ransac_thresh_px\": " << ransac_thresh_px << ",\n";
+        json << "  \"ransac_iterations\": " << iterations << ",\n";
+        json << "  \"correspondence_count\": " << corrs.size() << ",\n";
+        json << "  \"best_inliers\": " << best_inliers << ",\n";
+        json << "  \"ransac_refit_median_error\": " << ransac_median << ",\n";
+        json << "  \"all_corr_median_error\": " << all_median << ",\n";
+        json << "  \"chosen_model\": \"" << ((has_all_corr && all_median < ransac_median) ? "all_corr" : "ransac_refit") << "\",\n";
+        json << "  \"homography\": ["
+             << out_h[0] << ", " << out_h[1] << ", " << out_h[2] << ", "
+             << out_h[3] << ", " << out_h[4] << ", " << out_h[5] << ", "
+             << out_h[6] << ", " << out_h[7] << ", " << out_h[8] << "],\n";
+        json << "  \"markers\": [\n";
+        for (size_t i = 0; i < corrs.size(); ++i) {
+            const Pt2 p = apply_h(out_h, corrs[i].src);
+            const float dx = p.x - corrs[i].dst.x;
+            const float dy = p.y - corrs[i].dst.y;
+            const float err = std::sqrt(dx * dx + dy * dy);
+            const bool is_inlier = std::find(best_set.begin(), best_set.end(), static_cast<int32_t>(i)) != best_set.end();
+            json
+                << "    {\n"
+                << "      \"index\": " << i << ",\n"
+                << "      \"id\": " << corrs[i].id << ",\n"
+                << "      \"src\": [" << corrs[i].src.x << ", " << corrs[i].src.y << "],\n"
+                << "      \"dst\": [" << corrs[i].dst.x << ", " << corrs[i].dst.y << "],\n"
+                << "      \"mapped\": [" << p.x << ", " << p.y << "],\n"
+                << "      \"reprojection_error\": " << err << ",\n"
+                << "      \"is_inlier\": " << (is_inlier ? "true" : "false") << "\n"
+                << "    }";
+            if (i + 1 != corrs.size()) {
+                json << ",";
+            }
+            json << "\n";
+        }
+        json << "  ]\n";
+        json << "}\n";
+        std::ofstream file("results/native_global_debug/global_h_debug.json", std::ios::binary);
+        if (file.is_open()) {
+            file << json.str();
+        }
     }
     return true;
 }

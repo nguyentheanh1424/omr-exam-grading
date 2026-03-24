@@ -4,7 +4,7 @@ import ctypes
 from ctypes import POINTER, Structure, byref, c_char, c_float, c_int32, c_uint8, c_void_p
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import cv2 as cv
 import numpy as np
@@ -341,6 +341,7 @@ class NativeCoreClient:
         auto_threshold: bool | None = None,
         detected_markers: Sequence[tuple[int, float, float]] | None = None,
         bubble_field_configs: Sequence[BubbleFieldConfig] | None = None,
+        warp_param_overrides: dict[str, Any] | None = None,
     ) -> NativeRunOutput:
         img = self._as_contiguous_image(img)
         height, width = img.shape[:2]
@@ -399,6 +400,22 @@ class NativeCoreClient:
 
         warp_params.use_global_idw = 1 if use_global_idw else 0
         warp_params.use_region_refine = 1 if use_region_refine else 0
+        if warp_param_overrides:
+            for field_name, value in warp_param_overrides.items():
+                if not hasattr(warp_params, field_name):
+                    raise ValueError(f"unknown warp param override: {field_name}")
+                current_value = getattr(warp_params, field_name)
+                if isinstance(current_value, ctypes.Array):
+                    if not isinstance(value, Sequence):
+                        raise ValueError(f"warp param {field_name} expects a sequence")
+                    if len(value) != len(current_value):
+                        raise ValueError(
+                            f"warp param {field_name} expects {len(current_value)} values, got {len(value)}"
+                        )
+                    for idx, item in enumerate(value):
+                        current_value[idx] = item
+                else:
+                    setattr(warp_params, field_name, value)
         runtime_options.assume_aligned_input = 1 if assume_aligned_input else 0
         runtime_options.return_scored_image = 1 if return_scored_image else 0
         runtime_options.debug_level = debug_level
