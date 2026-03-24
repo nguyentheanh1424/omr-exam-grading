@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+try:
+    from native_core.tests._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
+
 from native_core.python_adapter import build_native_adapter_config, summarize_adapter_config
 
 

@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+try:
+    from native_core.tests._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
+
 import ctypes
 from ctypes import POINTER, Structure, byref, c_char, c_float, c_int32, c_uint8, c_uint32, c_void_p
 from pathlib import Path
@@ -42,6 +49,7 @@ class OMR_CircleROI(Structure):
         ("r", c_int32),
         ("question", c_int32),
         ("option", c_int32),
+        ("selection_mode", c_int32),
     ]
 
 
@@ -250,7 +258,7 @@ def run_cpp(
 
     roi_arr = (OMR_CircleROI * len(rois_cpp))()
     for i, (cx, cy, r, q, opt) in enumerate(rois_cpp):
-        roi_arr[i] = OMR_CircleROI(cx=cx, cy=cy, r=r, question=q, option=opt)
+        roi_arr[i] = OMR_CircleROI(cx=cx, cy=cy, r=r, question=q, option=opt, selection_mode=0)
 
     key_arr = (c_int32 * len(answer_key))(*answer_key)
 

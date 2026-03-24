@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+try:
+    from native_core.tests._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
+
 import json
 from pathlib import Path
 from typing import Any
