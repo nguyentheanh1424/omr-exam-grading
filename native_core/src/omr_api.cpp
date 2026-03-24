@@ -23,6 +23,9 @@ namespace {
 
 constexpr uint32_t kHandleMagic = 0x4F4D5231u;  // "OMR1"
 constexpr float kLargeNegative = -1e9f;
+constexpr float kMultiRecoveryAbsRatio = 0.75f;
+constexpr float kMultiRecoveryBestRatio = 0.70f;
+constexpr float kScoreCompareEps = 1e-3f;
 
 void copy_error_message(char* dst, const char* src) {
     if (dst == nullptr) {
@@ -47,6 +50,10 @@ bool is_finite(float x) {
     return std::isfinite(static_cast<double>(x)) != 0;
 }
 
+bool ge_with_eps(float lhs, float rhs, float eps = kScoreCompareEps) {
+    return lhs + eps >= rhs;
+}
+
 bool checked_mul_size_t(size_t a, size_t b, size_t* out) {
     if (out == nullptr) {
         return false;
@@ -59,6 +66,22 @@ bool checked_mul_size_t(size_t a, size_t b, size_t* out) {
         return false;
     }
     *out = a * b;
+    return true;
+}
+
+bool alloc_int32_buffer(size_t count, int32_t** out_ptr, const char* err_msg, OMR_Result* out_result) {
+    if (out_ptr == nullptr) {
+        return false;
+    }
+    *out_ptr = nullptr;
+    if (count == 0) {
+        return true;
+    }
+    *out_ptr = static_cast<int32_t*>(std::malloc(sizeof(int32_t) * count));
+    if (*out_ptr == nullptr) {
+        set_error(out_result, OMR_ERR_ALLOCATION_FAILED, err_msg);
+        return false;
+    }
     return true;
 }
 
@@ -254,6 +277,7 @@ bool validate_form(
     }
     std::vector<uint8_t> seen(seen_size, 0);
     std::vector<int32_t> rois_per_question(static_cast<size_t>(form->n_questions), 0);
+    std::vector<int32_t> question_selection_modes(static_cast<size_t>(form->n_questions), -1);
 
     const int32_t roi_width_limit =
         (runtime_options != nullptr && runtime_options->assume_aligned_input == 0)
@@ -278,6 +302,10 @@ bool validate_form(
             copy_error_message(err, "ROI option index out of range");
             return false;
         }
+        if (!(roi.selection_mode == OMR_SELECTION_SINGLE || roi.selection_mode == OMR_SELECTION_MULTIPLE)) {
+            copy_error_message(err, "ROI selection_mode is out of range");
+            return false;
+        }
 
         if (roi.cx - roi.r < 0 || roi.cx + roi.r >= roi_width_limit ||
             roi.cy - roi.r < 0 || roi.cy + roi.r >= roi_height_limit) {
@@ -294,6 +322,13 @@ bool validate_form(
         }
         seen[idx] = 1;
         rois_per_question[static_cast<size_t>(roi.question)] += 1;
+        const size_t q_idx = static_cast<size_t>(roi.question);
+        if (question_selection_modes[q_idx] < 0) {
+            question_selection_modes[q_idx] = roi.selection_mode;
+        } else if (question_selection_modes[q_idx] != roi.selection_mode) {
+            copy_error_message(err, "each question must use one consistent selection_mode");
+            return false;
+        }
     }
 
     for (int32_t q = 0; q < form->n_questions; ++q) {
@@ -618,6 +653,108 @@ float bubble_score(
     return std::max(0.0f, fill_dark - bg_dark);
 }
 
+void detect_filled_options(
+    const std::vector<float>& scores,
+    const OMR_GradingParams& g,
+    std::vector<int32_t>* filled_options
+) {
+    if (filled_options == nullptr) {
+        return;
+    }
+    filled_options->clear();
+    if (scores.empty()) {
+        return;
+    }
+
+    const float recovery_abs_th = std::max(0.12f, g.abs_th * kMultiRecoveryAbsRatio);
+
+    std::vector<std::pair<int32_t, float>> items;
+    items.reserve(scores.size());
+    for (size_t opt = 0; opt < scores.size(); ++opt) {
+        items.push_back({static_cast<int32_t>(opt), scores[opt]});
+    }
+    std::sort(items.begin(), items.end(), [](const auto& a, const auto& b) {
+        return a.second > b.second;
+    });
+
+    std::vector<int32_t> strict_filled;
+    for (const auto& item : items) {
+        if (ge_with_eps(item.second, g.abs_th)) {
+            strict_filled.push_back(item.first);
+        }
+    }
+    if (strict_filled.size() >= 2) {
+        std::sort(strict_filled.begin(), strict_filled.end());
+        *filled_options = strict_filled;
+        return;
+    }
+
+    const float best_val = items[0].second;
+    const float second_val = items.size() > 1 ? items[1].second : kLargeNegative;
+    std::vector<int32_t> soft_filled;
+    for (const auto& item : items) {
+        if (ge_with_eps(item.second, recovery_abs_th)) {
+            soft_filled.push_back(item.first);
+        }
+    }
+    if (soft_filled.size() >= 2 && ge_with_eps(second_val, best_val * kMultiRecoveryBestRatio)) {
+        soft_filled.resize(2);
+        std::sort(soft_filled.begin(), soft_filled.end());
+        *filled_options = soft_filled;
+        return;
+    }
+
+    if (ge_with_eps(best_val, g.abs_th)) {
+        filled_options->push_back(items[0].first);
+    }
+}
+
+std::pair<int32_t, int32_t> resolve_question_selection(
+    const std::vector<float>& scores,
+    const std::vector<int32_t>& filled_options,
+    int32_t selection_mode,
+    const OMR_GradingParams& g
+) {
+    if (scores.empty()) {
+        return {-1, OMR_STATUS_BLANK};
+    }
+    if (filled_options.empty()) {
+        return {-1, OMR_STATUS_BLANK};
+    }
+
+    std::vector<std::pair<int32_t, float>> items;
+    items.reserve(scores.size());
+    for (size_t opt = 0; opt < scores.size(); ++opt) {
+        items.push_back({static_cast<int32_t>(opt), scores[opt]});
+    }
+    std::sort(items.begin(), items.end(), [](const auto& a, const auto& b) {
+        return a.second > b.second;
+    });
+
+    const int32_t best_opt = items[0].first;
+    const float best_val = items[0].second;
+    const float second_val = items.size() > 1 ? items[1].second : kLargeNegative;
+
+    if (selection_mode == OMR_SELECTION_MULTIPLE) {
+        if (filled_options.size() >= 2) {
+            if (ge_with_eps(second_val, g.abs_th)) {
+                return {-1, OMR_STATUS_MULTIPLE};
+            }
+            return {-1, OMR_STATUS_UNCERTAIN};
+        }
+        return {filled_options[0], OMR_STATUS_SINGLE};
+    }
+
+    if (filled_options.size() >= 2) {
+        return {-1, OMR_STATUS_INVALID_MULTIPLE_ON_SINGLE};
+    }
+
+    if (ge_with_eps(best_val, g.abs_th) && ge_with_eps(best_val - second_val, g.rel_th)) {
+        return {best_opt, OMR_STATUS_SINGLE};
+    }
+    return {-1, OMR_STATUS_UNCERTAIN};
+}
+
 }  // namespace
 
 uint32_t omr_api_version(void) {
@@ -657,6 +794,14 @@ void omr_free_result(OMR_Result* out_result) {
         std::free(out_result->answers);
         out_result->answers = nullptr;
     }
+    if (out_result->selected_option_flags != nullptr) {
+        std::free(out_result->selected_option_flags);
+        out_result->selected_option_flags = nullptr;
+    }
+    if (out_result->question_statuses != nullptr) {
+        std::free(out_result->question_statuses);
+        out_result->question_statuses = nullptr;
+    }
     if (out_result->metadata_selected_rows != nullptr) {
         std::free(out_result->metadata_selected_rows);
         out_result->metadata_selected_rows = nullptr;
@@ -666,6 +811,8 @@ void omr_free_result(OMR_Result* out_result) {
         out_result->scored_image_data = nullptr;
     }
     out_result->n_answers = 0;
+    out_result->n_selected_option_flags = 0;
+    out_result->n_question_statuses = 0;
     out_result->n_metadata_selected_rows = 0;
     out_result->scored_image_width = 0;
     out_result->scored_image_height = 0;
@@ -894,40 +1041,65 @@ int32_t omr_process(
         }
     }
 
-    std::vector<float> best_val(static_cast<size_t>(form->n_questions), kLargeNegative);
-    std::vector<float> second_val(static_cast<size_t>(form->n_questions), kLargeNegative);
-    std::vector<int32_t> best_opt(static_cast<size_t>(form->n_questions), -1);
+    const size_t question_count = static_cast<size_t>(form->n_questions);
+    const size_t option_count = static_cast<size_t>(form->n_options_per_question);
+    std::vector<float> score_matrix(question_count * option_count, 0.0f);
+    std::vector<int32_t> question_selection_modes(question_count, OMR_SELECTION_SINGLE);
 
     for (int32_t i = 0; i < form->n_circle_rois; ++i) {
         const OMR_CircleROI& roi = form->circle_rois[i];
         const float s = bubble_score(working_image, roi, *grading_params);
-
         const size_t q_idx = static_cast<size_t>(roi.question);
-        if (s > best_val[q_idx]) {
-            second_val[q_idx] = best_val[q_idx];
-            best_val[q_idx] = s;
-            best_opt[q_idx] = roi.option;
-        } else if (s > second_val[q_idx]) {
-            second_val[q_idx] = s;
-        }
+        const size_t score_idx = q_idx * option_count + static_cast<size_t>(roi.option);
+        score_matrix[score_idx] = s;
+        question_selection_modes[q_idx] = roi.selection_mode;
     }
 
-    const size_t answers_count = static_cast<size_t>(form->n_questions);
-    int32_t* answers = static_cast<int32_t*>(std::malloc(sizeof(int32_t) * answers_count));
-    if (answers == nullptr) {
-        return set_error(out_result, OMR_ERR_ALLOCATION_FAILED, "failed to allocate answers");
+    int32_t* answers = nullptr;
+    if (!alloc_int32_buffer(question_count, &answers, "failed to allocate answers", out_result)) {
+        return out_result->err_code;
     }
-    for (int32_t q = 0; q < form->n_questions; ++q) {
-        answers[q] = -1;
+    int32_t* selected_option_flags = nullptr;
+    if (!alloc_int32_buffer(
+            question_count * option_count,
+            &selected_option_flags,
+            "failed to allocate selected option flags",
+            out_result)) {
+        std::free(answers);
+        return out_result->err_code;
     }
+    int32_t* question_statuses = nullptr;
+    if (!alloc_int32_buffer(question_count, &question_statuses, "failed to allocate question statuses", out_result)) {
+        std::free(answers);
+        std::free(selected_option_flags);
+        return out_result->err_code;
+    }
+
+    std::fill(answers, answers + question_count, -1);
+    std::fill(selected_option_flags, selected_option_flags + question_count * option_count, 0);
+    std::fill(question_statuses, question_statuses + question_count, OMR_STATUS_BLANK);
 
     for (int32_t q = 0; q < form->n_questions; ++q) {
         const size_t q_idx = static_cast<size_t>(q);
-        if (best_opt[q_idx] >= 0 &&
-            best_val[q_idx] >= grading_params->abs_th &&
-            (best_val[q_idx] - second_val[q_idx]) >= grading_params->rel_th) {
-            answers[q] = best_opt[q_idx];
+        std::vector<float> question_scores(option_count, 0.0f);
+        for (size_t opt = 0; opt < option_count; ++opt) {
+            question_scores[opt] = score_matrix[q_idx * option_count + opt];
         }
+
+        std::vector<int32_t> filled_options;
+        detect_filled_options(question_scores, *grading_params, &filled_options);
+        for (int32_t option : filled_options) {
+            selected_option_flags[q_idx * option_count + static_cast<size_t>(option)] = 1;
+        }
+
+        const auto resolved = resolve_question_selection(
+            question_scores,
+            filled_options,
+            question_selection_modes[q_idx],
+            *grading_params
+        );
+        answers[q_idx] = resolved.first;
+        question_statuses[q_idx] = resolved.second;
     }
 
     size_t metadata_selection_count = 0;
@@ -941,9 +1113,9 @@ int32_t omr_process(
             std::malloc(sizeof(int32_t) * metadata_selection_count)
         );
         if (metadata_selected_rows == nullptr) {
-            std::free(out_result->answers);
-            out_result->answers = nullptr;
-            out_result->n_answers = 0;
+            std::free(answers);
+            std::free(selected_option_flags);
+            std::free(question_statuses);
             return set_error(out_result, OMR_ERR_ALLOCATION_FAILED, "failed to allocate metadata selections");
         }
         for (size_t i = 0; i < metadata_selection_count; ++i) {
@@ -1024,6 +1196,10 @@ int32_t omr_process(
 
     out_result->answers = answers;
     out_result->n_answers = form->n_questions;
+    out_result->selected_option_flags = selected_option_flags;
+    out_result->n_selected_option_flags = static_cast<int32_t>(question_count * option_count);
+    out_result->question_statuses = question_statuses;
+    out_result->n_question_statuses = form->n_questions;
     out_result->metadata_selected_rows = metadata_selected_rows;
     out_result->n_metadata_selected_rows = static_cast<int32_t>(metadata_selection_count);
     out_result->score = score;
@@ -1041,6 +1217,12 @@ int32_t omr_process(
             std::free(out_result->answers);
             out_result->answers = nullptr;
             out_result->n_answers = 0;
+            std::free(out_result->selected_option_flags);
+            out_result->selected_option_flags = nullptr;
+            out_result->n_selected_option_flags = 0;
+            std::free(out_result->question_statuses);
+            out_result->question_statuses = nullptr;
+            out_result->n_question_statuses = 0;
             if (out_result->metadata_selected_rows != nullptr) {
                 std::free(out_result->metadata_selected_rows);
                 out_result->metadata_selected_rows = nullptr;
@@ -1054,6 +1236,12 @@ int32_t omr_process(
             std::free(out_result->answers);
             out_result->answers = nullptr;
             out_result->n_answers = 0;
+            std::free(out_result->selected_option_flags);
+            out_result->selected_option_flags = nullptr;
+            out_result->n_selected_option_flags = 0;
+            std::free(out_result->question_statuses);
+            out_result->question_statuses = nullptr;
+            out_result->n_question_statuses = 0;
             if (out_result->metadata_selected_rows != nullptr) {
                 std::free(out_result->metadata_selected_rows);
                 out_result->metadata_selected_rows = nullptr;

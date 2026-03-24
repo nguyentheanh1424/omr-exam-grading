@@ -361,16 +361,19 @@ class OMRProcessor:
         if not filled_options:
             return -1, "blank"
 
+        best_opt, best_val = sorted_items[0]
+        second_val = sorted_items[1][1] if len(sorted_items) > 1 else -1e9
+
         if selection_mode == "multiple":
             if len(filled_options) >= 2:
-                return -1, "multiple"
+                if second_val >= self.abs_th:
+                    return -1, "multiple"
+                return -1, "uncertain"
             return filled_options[0], "single"
 
         if len(filled_options) >= 2:
             return -1, "invalid_multiple_on_single"
 
-        best_opt, best_val = sorted_items[0]
-        second_val = sorted_items[1][1] if len(sorted_items) > 1 else -1e9
         if best_val >= self.abs_th and (best_val - second_val) >= self.rel_th:
             return best_opt, "single"
         return -1, "uncertain"

@@ -33,6 +33,7 @@ class NativeCircleROI:
     r: int
     question: int
     option: int
+    selection_mode: int
 
 
 @dataclass(frozen=True)
@@ -163,6 +164,7 @@ def normalize_circle_rois(circle_rois: Sequence[CircleROI]) -> tuple[tuple[Nativ
 
     seen_pairs: set[tuple[int, int]] = set()
     by_question: dict[int, set[int]] = {}
+    selection_modes_by_question: dict[int, str] = {}
     normalized: list[NativeCircleROI] = []
     source_questions: set[int] = set()
 
@@ -173,6 +175,9 @@ def normalize_circle_rois(circle_rois: Sequence[CircleROI]) -> tuple[tuple[Nativ
             raise ValueError("ROI option indices must be >= 0")
         if roi.r <= 0:
             raise ValueError("ROI radius must be > 0")
+        selection_mode = str(getattr(roi, "selection_mode", "single") or "single").strip().lower()
+        if selection_mode not in {"single", "multiple"}:
+            raise ValueError(f"unsupported ROI selection_mode: {selection_mode}")
 
         native_question = roi.question - 1
         pair = (native_question, roi.option)
@@ -182,6 +187,12 @@ def normalize_circle_rois(circle_rois: Sequence[CircleROI]) -> tuple[tuple[Nativ
         seen_pairs.add(pair)
         source_questions.add(roi.question)
         by_question.setdefault(native_question, set()).add(roi.option)
+        existing_mode = selection_modes_by_question.get(native_question)
+        if existing_mode is not None and existing_mode != selection_mode:
+            raise ValueError(
+                f"question {native_question} mixes selection modes: {existing_mode} vs {selection_mode}"
+            )
+        selection_modes_by_question[native_question] = selection_mode
         normalized.append(
             NativeCircleROI(
                 cx=int(roi.cx),
@@ -189,6 +200,7 @@ def normalize_circle_rois(circle_rois: Sequence[CircleROI]) -> tuple[tuple[Nativ
                 r=int(roi.r),
                 question=native_question,
                 option=int(roi.option),
+                selection_mode=0 if selection_mode == "single" else 1,
             )
         )
 
@@ -241,8 +253,28 @@ def build_native_adapter_config(
     windows_4pts: Iterable[Sequence[int]] = WINDOWS_4PTS,
 ) -> NativeAdapterConfig:
     python_rois = load_circle_rois(str(_resolve_repo_path(circle_rois_path)))
-    native_rois, n_questions, n_options_per_question = normalize_circle_rois(python_rois)
-    answer_key = load_answer_key(answer_key_path, fallback_question_count=n_questions)
+    answer_key = load_answer_key(
+        answer_key_path,
+        fallback_question_count=max(roi.question for roi in python_rois),
+    )
+    return build_native_adapter_config_from_data(
+        circle_rois=python_rois,
+        answer_key=answer_key,
+        template_layout_path=template_layout_path,
+        output_size=output_size,
+        windows_4pts=windows_4pts,
+    )
+
+
+def build_native_adapter_config_from_data(
+    *,
+    circle_rois: Sequence[CircleROI],
+    answer_key: Sequence[int],
+    template_layout_path: str | Path = TEMPLATE_MARKER_POSITIONS_FILE,
+    output_size: tuple[int, int] = A4_PX,
+    windows_4pts: Iterable[Sequence[int]] = WINDOWS_4PTS,
+) -> NativeAdapterConfig:
+    native_rois, n_questions, n_options_per_question = normalize_circle_rois(circle_rois)
     native_answer_key = normalize_answer_key(
         answer_key,
         n_questions=n_questions,

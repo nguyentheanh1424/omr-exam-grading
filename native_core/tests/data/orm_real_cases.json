@@ -1,0 +1,142 @@
+[
+  {
+    "id": "blank-single-1photo2-q01",
+    "image": "samples/1photo2.jpg",
+    "question": 1,
+    "selection_mode": "single",
+    "expected_status": "blank",
+    "expected_selected_options": [],
+    "expected_answer": -1,
+    "note": "Blank question on a mostly empty sheet."
+  },
+  {
+    "id": "single-1photo3-q01",
+    "image": "samples/1photo3.jpg",
+    "question": 1,
+    "selection_mode": "single",
+    "expected_status": "single",
+    "expected_selected_options": [0],
+    "expected_answer": 0,
+    "note": "Clear single filled bubble."
+  },
+  {
+    "id": "single-1photo3-q04",
+    "image": "samples/1photo3.jpg",
+    "question": 4,
+    "selection_mode": "single",
+    "expected_status": "single",
+    "expected_selected_options": [2],
+    "expected_answer": 2,
+    "note": "Clear single filled bubble in the second question block."
+  },
+  {
+    "id": "invalid-single-1photo3-q03",
+    "image": "samples/1photo3.jpg",
+    "question": 3,
+    "selection_mode": "single",
+    "expected_status": "invalid_multiple_on_single",
+    "expected_selected_options": [1, 3],
+    "expected_answer": -1,
+    "note": "Two strong filled bubbles on a single-choice question."
+  },
+  {
+    "id": "invalid-single-1photo3-q15",
+    "image": "samples/1photo3.jpg",
+    "question": 15,
+    "selection_mode": "single",
+    "expected_status": "invalid_multiple_on_single",
+    "expected_selected_options": [0, 1, 2],
+    "expected_answer": -1,
+    "note": "Three filled bubbles on a single-choice question."
+  },
+  {
+    "id": "invalid-single-1photo3-q22",
+    "image": "samples/1photo3.jpg",
+    "question": 22,
+    "selection_mode": "single",
+    "expected_status": "invalid_multiple_on_single",
+    "expected_selected_options": [1, 4],
+    "expected_answer": -1,
+    "note": "Two filled bubbles with a clear secondary mark."
+  },
+  {
+    "id": "blank-multiple-1photo2-q01",
+    "image": "samples/1photo2.jpg",
+    "question": 1,
+    "selection_mode": "multiple",
+    "expected_status": "blank",
+    "expected_selected_options": [],
+    "expected_answer": -1,
+    "note": "Blank question even when the question mode allows multiple answers."
+  },
+  {
+    "id": "single-on-multiple-1photo5-q01",
+    "image": "samples/1photo5.jpg",
+    "question": 1,
+    "selection_mode": "multiple",
+    "expected_status": "single",
+    "expected_selected_options": [0],
+    "expected_answer": 0,
+    "note": "Multiple-choice question with exactly one filled bubble."
+  },
+  {
+    "id": "multiple-1photo5-q03",
+    "image": "samples/1photo5.jpg",
+    "question": 3,
+    "selection_mode": "multiple",
+    "expected_status": "multiple",
+    "expected_selected_options": [1, 3],
+    "expected_answer": -1,
+    "note": "Two strong filled bubbles on a multiple-choice question."
+  },
+  {
+    "id": "multiple-1photo5-q15",
+    "image": "samples/1photo5.jpg",
+    "question": 15,
+    "selection_mode": "multiple",
+    "expected_status": "multiple",
+    "expected_selected_options": [0, 1, 2],
+    "expected_answer": -1,
+    "note": "Three strong filled bubbles on a multiple-choice question."
+  },
+  {
+    "id": "multiple-1photo5-q22",
+    "image": "samples/1photo5.jpg",
+    "question": 22,
+    "selection_mode": "multiple",
+    "expected_status": "multiple",
+    "expected_selected_options": [1, 4],
+    "expected_answer": -1,
+    "note": "Two filled bubbles that should remain valid in multiple mode."
+  },
+  {
+    "id": "multiple-1photo5-q40",
+    "image": "samples/1photo5.jpg",
+    "question": 40,
+    "selection_mode": "multiple",
+    "expected_status": "multiple",
+    "expected_selected_options": [2, 3],
+    "expected_answer": -1,
+    "note": "End-of-page multiple-mark case."
+  },
+  {
+    "id": "uncertain-multiple-1photo1-q16",
+    "image": "samples/1photo1.jpg",
+    "question": 16,
+    "selection_mode": "multiple",
+    "expected_status": "uncertain",
+    "expected_selected_options": [0, 1],
+    "expected_answer": -1,
+    "note": "Recovered borderline second bubble should stay uncertain in multiple mode."
+  },
+  {
+    "id": "uncertain-multiple-1photo1-q19",
+    "image": "samples/1photo1.jpg",
+    "question": 19,
+    "selection_mode": "multiple",
+    "expected_status": "uncertain",
+    "expected_selected_options": [0, 1],
+    "expected_answer": -1,
+    "note": "Real-image borderline recovered second bubble."
+  }
+]

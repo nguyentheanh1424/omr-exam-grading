@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 from ctypes import POINTER, Structure, byref, c_char, c_float, c_int32, c_uint8, c_void_p
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,7 @@ class OMR_CircleROI(Structure):
         ("r", c_int32),
         ("question", c_int32),
         ("option", c_int32),
+        ("selection_mode", c_int32),
     ]
 
 
@@ -175,6 +177,10 @@ class OMR_Result(Structure):
         ("graded_questions", c_int32),
         ("n_answers", c_int32),
         ("answers", POINTER(c_int32)),
+        ("n_selected_option_flags", c_int32),
+        ("selected_option_flags", POINTER(c_int32)),
+        ("n_question_statuses", c_int32),
+        ("question_statuses", POINTER(c_int32)),
         ("n_metadata_selected_rows", c_int32),
         ("metadata_selected_rows", POINTER(c_int32)),
         ("used_abs_th", c_float),
@@ -190,6 +196,8 @@ class OMR_Result(Structure):
 @dataclass
 class NativeRunOutput:
     answers: list[int]
+    selected_options: list[list[int]]
+    question_statuses: list[str]
     score: int
     total_questions: int
     graded_questions: int
@@ -203,7 +211,9 @@ class NativeRunOutput:
 class NativeCoreClient:
     def __init__(self, dll_path: str | Path | None = None):
         self._root = Path(__file__).resolve().parents[1]
-        self._dll_path = Path(dll_path) if dll_path is not None else self._root / "build" / "native_core" / "omr_core.dll"
+        env_dll_path = os.environ.get("OMR_DLL_PATH")
+        resolved_dll_path = dll_path if dll_path is not None else env_dll_path
+        self._dll_path = Path(resolved_dll_path) if resolved_dll_path is not None else self._root / "build" / "native_core" / "omr_core.dll"
         if not self._dll_path.exists():
             raise FileNotFoundError(f"Missing DLL: {self._dll_path}")
         self.lib = ctypes.CDLL(str(self._dll_path))
@@ -260,6 +270,7 @@ class NativeCoreClient:
                 r=roi.r,
                 question=roi.question,
                 option=roi.option,
+                selection_mode=roi.selection_mode,
             )
 
         answer_key_arr = (c_int32 * len(config.answer_key))(*config.answer_key)
@@ -447,6 +458,26 @@ class NativeCoreClient:
                 )
 
             answers = [result.answers[i] for i in range(result.n_answers)]
+            status_names = {
+                0: "blank",
+                1: "single",
+                2: "multiple",
+                3: "invalid_multiple_on_single",
+                4: "uncertain",
+            }
+            question_statuses = [
+                status_names.get(int(result.question_statuses[i]), f"unknown_{int(result.question_statuses[i])}")
+                for i in range(result.n_question_statuses)
+            ]
+            selected_options: list[list[int]] = []
+            for question in range(config.n_questions):
+                base = question * config.n_options_per_question
+                selected = [
+                    option
+                    for option in range(config.n_options_per_question)
+                    if result.n_selected_option_flags > (base + option) and int(result.selected_option_flags[base + option]) != 0
+                ]
+                selected_options.append(selected)
             scored_image = self._copy_scored_image(result)
             bubble_field_selected_rows = None
             bubble_field_values = None
@@ -472,6 +503,8 @@ class NativeCoreClient:
                     )
             return NativeRunOutput(
                 answers=answers,
+                selected_options=selected_options,
+                question_statuses=question_statuses,
                 score=int(result.score),
                 total_questions=int(result.total_questions),
                 graded_questions=int(result.graded_questions),

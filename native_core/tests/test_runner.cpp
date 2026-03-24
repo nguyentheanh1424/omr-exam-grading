@@ -224,6 +224,15 @@ void test_basic_detect(TestContext& ctx) {
     if (out.answers != nullptr) {
         assert_true(ctx, out.answers[0] == 1, "basic detect predicted option should be 1");
     }
+    assert_true(ctx, out.n_question_statuses == 1, "basic detect question statuses size");
+    if (out.question_statuses != nullptr) {
+        assert_true(ctx, out.question_statuses[0] == OMR_STATUS_SINGLE, "basic detect should be single");
+    }
+    assert_true(ctx, out.n_selected_option_flags == 2, "basic detect selected option count");
+    if (out.selected_option_flags != nullptr) {
+        assert_true(ctx, out.selected_option_flags[0] == 0, "basic detect option 0 should be unselected");
+        assert_true(ctx, out.selected_option_flags[1] == 1, "basic detect option 1 should be selected");
+    }
     assert_true(ctx, out.score == 1, "basic detect score should be 1");
 
     omr_free_result(&out);
@@ -268,7 +277,116 @@ void test_ambiguous_answer(TestContext& ctx) {
     if (out.answers != nullptr) {
         assert_true(ctx, out.answers[0] == -1, "ambiguous detect should be unanswered");
     }
+    if (out.question_statuses != nullptr) {
+        assert_true(
+            ctx,
+            out.question_statuses[0] == OMR_STATUS_INVALID_MULTIPLE_ON_SINGLE,
+            "ambiguous detect should be invalid multiple on single"
+        );
+    }
+    if (out.selected_option_flags != nullptr) {
+        assert_true(ctx, out.selected_option_flags[0] == 1, "ambiguous detect option 0 should be selected");
+        assert_true(ctx, out.selected_option_flags[1] == 1, "ambiguous detect option 1 should be selected");
+    }
     assert_true(ctx, out.score == 0, "ambiguous detect score should be 0");
+
+    omr_free_result(&out);
+    omr_destroy(h);
+}
+
+void test_multiple_mode_answer(TestContext& ctx) {
+    std::vector<uint8_t> image_storage;
+    OMR_ImageView image = make_image(&image_storage, 260, 160);
+
+    draw_dark_annulus(image_storage, image.width, image.height, image.stride, 80, 80, 7, 14, 40u);
+    draw_dark_annulus(image_storage, image.width, image.height, image.stride, 180, 80, 7, 14, 40u);
+
+    OMR_CircleROI rois[2]{};
+    rois[0] = {80, 80, 16, 0, 0, OMR_SELECTION_MULTIPLE};
+    rois[1] = {180, 80, 16, 0, 1, OMR_SELECTION_MULTIPLE};
+    int32_t key[1] = {1};
+
+    OMR_FormSpec form{};
+    form.output_width = image.width;
+    form.output_height = image.height;
+    form.circle_rois = rois;
+    form.n_circle_rois = 2;
+    form.n_questions = 1;
+    form.n_options_per_question = 2;
+    form.answer_key = key;
+    form.n_answer_key = 1;
+
+    OMR_WarpParams warp{};
+    OMR_BinarizeParams bin{};
+    OMR_GradingParams grading{};
+    OMR_RuntimeOptions runtime{};
+    setup_defaults(&warp, &bin, &grading, &runtime);
+    grading.rel_th = 0.10f;
+
+    OMR_Result out{};
+    omr_init_result(&out);
+    OMR_Handle* h = omr_create();
+
+    const int32_t rc = omr_process(h, &image, &form, &warp, &bin, &grading, &runtime, &out);
+    assert_true(ctx, rc == OMR_OK, "multiple mode detect should succeed");
+    if (out.answers != nullptr) {
+        assert_true(ctx, out.answers[0] == -1, "multiple mode answer should stay -1");
+    }
+    if (out.question_statuses != nullptr) {
+        assert_true(ctx, out.question_statuses[0] == OMR_STATUS_MULTIPLE, "multiple mode should resolve to multiple");
+    }
+    if (out.selected_option_flags != nullptr) {
+        assert_true(ctx, out.selected_option_flags[0] == 1, "multiple mode option 0 should be selected");
+        assert_true(ctx, out.selected_option_flags[1] == 1, "multiple mode option 1 should be selected");
+    }
+
+    omr_free_result(&out);
+    omr_destroy(h);
+}
+
+void test_multiple_mode_recovered_second_becomes_uncertain(TestContext& ctx) {
+    std::vector<uint8_t> image_storage;
+    OMR_ImageView image = make_image(&image_storage, 260, 160);
+
+    draw_dark_annulus(image_storage, image.width, image.height, image.stride, 80, 80, 7, 14, 200u);
+    draw_dark_annulus(image_storage, image.width, image.height, image.stride, 180, 80, 7, 14, 210u);
+
+    OMR_CircleROI rois[2]{};
+    rois[0] = {80, 80, 16, 0, 0, OMR_SELECTION_MULTIPLE};
+    rois[1] = {180, 80, 16, 0, 1, OMR_SELECTION_MULTIPLE};
+    int32_t key[1] = {1};
+
+    OMR_FormSpec form{};
+    form.output_width = image.width;
+    form.output_height = image.height;
+    form.circle_rois = rois;
+    form.n_circle_rois = 2;
+    form.n_questions = 1;
+    form.n_options_per_question = 2;
+    form.answer_key = key;
+    form.n_answer_key = 1;
+
+    OMR_WarpParams warp{};
+    OMR_BinarizeParams bin{};
+    OMR_GradingParams grading{};
+    OMR_RuntimeOptions runtime{};
+    setup_defaults(&warp, &bin, &grading, &runtime);
+    grading.abs_th = 0.20f;
+    grading.rel_th = 0.055f;
+
+    OMR_Result out{};
+    omr_init_result(&out);
+    OMR_Handle* h = omr_create();
+
+    const int32_t rc = omr_process(h, &image, &form, &warp, &bin, &grading, &runtime, &out);
+    assert_true(ctx, rc == OMR_OK, "multiple recovered detect should succeed");
+    if (out.question_statuses != nullptr) {
+        assert_true(ctx, out.question_statuses[0] == OMR_STATUS_UNCERTAIN, "recovered second mark should be uncertain");
+    }
+    if (out.selected_option_flags != nullptr) {
+        assert_true(ctx, out.selected_option_flags[0] == 1, "recovered option 0 should be selected");
+        assert_true(ctx, out.selected_option_flags[1] == 1, "recovered option 1 should be selected");
+    }
 
     omr_free_result(&out);
     omr_destroy(h);
@@ -781,6 +899,8 @@ int main() {
     assert_true(ctx, omr_api_version() == OMR_API_VERSION, "api version should match header");
     test_basic_detect(ctx);
     test_ambiguous_answer(ctx);
+    test_multiple_mode_answer(ctx);
+    test_multiple_mode_recovered_second_becomes_uncertain(ctx);
     test_answer_key_skip(ctx);
     test_duplicate_roi_fails(ctx);
     test_incomplete_question_roi_fails(ctx);

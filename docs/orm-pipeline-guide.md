@@ -80,9 +80,9 @@ Các trạng thái hiện có:
 
 - `blank`: không có bubble nào đủ mạnh.
 - `single`: đúng 1 lựa chọn hợp lệ.
-- `multiple`: câu ở mode `multiple` và có từ 2 bubble được tô.
+- `multiple`: câu ở mode `multiple` và có từ 2 bubble mạnh đủ ngưỡng chính.
 - `invalid_multiple_on_single`: câu ở mode `single` nhưng bị tô nhiều ô.
-- `uncertain`: có dấu hiệu tô nhưng chưa đủ chắc để chọn 1 đáp án hợp lệ.
+- `uncertain`: có dấu hiệu tô nhưng chưa đủ chắc để chọn 1 đáp án hợp lệ, hoặc câu `multiple` có ô thứ hai chỉ ở mức recovered/sát ngưỡng.
 
 ## answers và selected_options
 
@@ -128,6 +128,24 @@ Hiểu nhanh:
 
 - `multiple_questions`: chỉ các câu mode `multiple` và đang có nhiều lựa chọn hợp lệ.
 - `invalid_multiple_on_single_questions`: các câu mode `single` nhưng bị tô nhiều ô.
+
+## Rule đã chốt hiện tại
+
+Các rule nghiệp vụ hiện đã chốt:
+
+- Câu `single` tô nhiều ô: `invalid_multiple_on_single`
+- Câu `multiple` tô nhiều ô và ô thứ hai đủ ngưỡng chính: `multiple`
+- Câu `multiple` chỉ tô 1 ô: `single`
+- Câu `multiple` không tô ô nào: `blank`
+- Câu `multiple` có ô thứ hai chỉ vừa recovered/sát ngưỡng: `uncertain`
+- Các câu `invalid_multiple_on_single` và `uncertain` đều có `answers = -1`
+
+Downstream nên dùng:
+
+- `question_statuses`
+- `selected_options`
+
+`answers` chỉ nên coi là đầu ra tương thích ngược cho grading.
 
 ## Xử lý input ảnh
 

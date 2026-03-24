@@ -48,10 +48,18 @@ def run_python_pipeline(
         use_region_refine=True,
         debug=False,
     )
-    result = omr.run(warped, output=None, debug=False)
+    prepared_gray = omr._prep_gray(warped)
+    score_cache = {
+        (roi.question, roi.option): omr._bubble_score(prepared_gray, roi.cx, roi.cy, roi.r)
+        for roi in omr.circle_rois
+    }
+    answers, selected_options, question_statuses = omr._detect_answers(score_cache)
+    score, _ = omr._grade(answers)
     return {
-        "score": int(result["score"]),
-        "answers": [int(value) for value in result["answers"]],
+        "score": int(score),
+        "answers": [int(value) for value in answers],
+        "selected_options": [[int(option) for option in values] for values in selected_options],
+        "question_statuses": [str(value) for value in question_statuses],
     }, warped
 
 
@@ -77,6 +85,8 @@ def run_native_grading_on_python_prep(
     return {
         "score": result.score,
         "answers": [int(value) for value in result.answers],
+        "selected_options": [[int(option) for option in values] for values in result.selected_options],
+        "question_statuses": [str(value) for value in result.question_statuses],
         "used_abs_th": result.used_abs_th,
         "used_rel_th": result.used_rel_th,
         "configured_abs_th": thresholds.abs_th,
@@ -84,13 +94,19 @@ def run_native_grading_on_python_prep(
     }
 
 
-def compare_answers(py_answers: list[int], native_answers: list[int]) -> dict[str, Any]:
+def compare_sequences(
+    py_values: list[Any],
+    native_values: list[Any],
+    *,
+    label: str,
+) -> dict[str, Any]:
     mismatches = []
-    for index, (py_value, native_value) in enumerate(zip(py_answers, native_answers)):
+    for index, (py_value, native_value) in enumerate(zip(py_values, native_values)):
         if py_value != native_value:
             mismatches.append(
                 {
                     "question": index,
+                    "field": label,
                     "python": py_value,
                     "native": native_value,
                 }
@@ -124,9 +140,28 @@ def main() -> None:
     for image_path in image_paths:
         python_result, warped = run_python_pipeline(warp_engine, omr, image_path)
         native_result = run_native_grading_on_python_prep(client, omr, warped)
-        answer_compare = compare_answers(python_result["answers"], native_result["answers"])
+        answer_compare = compare_sequences(
+            python_result["answers"],
+            native_result["answers"],
+            label="answers",
+        )
+        selected_compare = compare_sequences(
+            python_result["selected_options"],
+            native_result["selected_options"],
+            label="selected_options",
+        )
+        status_compare = compare_sequences(
+            python_result["question_statuses"],
+            native_result["question_statuses"],
+            label="question_statuses",
+        )
         score_match = python_result["score"] == native_result["score"]
-        exact_match = answer_compare["match"] and score_match
+        exact_match = (
+            score_match
+            and answer_compare["match"]
+            and selected_compare["match"]
+            and status_compare["match"]
+        )
 
         if exact_match:
             report["summary"]["exact_matches"] += 1
@@ -141,8 +176,18 @@ def main() -> None:
             "native_on_python_warp_python_prep": native_result,
             "score_match": score_match,
             "answer_match": answer_compare["match"],
-            "mismatch_count": answer_compare["mismatch_count"],
-            "mismatches": answer_compare["mismatches"],
+            "selected_options_match": selected_compare["match"],
+            "question_statuses_match": status_compare["match"],
+            "mismatch_count": (
+                answer_compare["mismatch_count"]
+                + selected_compare["mismatch_count"]
+                + status_compare["mismatch_count"]
+            ),
+            "mismatches": (
+                answer_compare["mismatches"]
+                + selected_compare["mismatches"]
+                + status_compare["mismatches"]
+            ),
         }
         report["images"].append(image_report)
         print(
@@ -150,7 +195,9 @@ def main() -> None:
             image_report["image"],
             f"score_match={score_match}",
             f"answer_match={answer_compare['match']}",
-            f"mismatch_count={answer_compare['mismatch_count']}",
+            f"selected_match={selected_compare['match']}",
+            f"status_match={status_compare['match']}",
+            f"mismatch_count={image_report['mismatch_count']}",
         )
 
     report_path = OUTPUT_DIR / "parity_report.json"

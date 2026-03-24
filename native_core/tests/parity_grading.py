@@ -42,6 +42,7 @@ class OMR_CircleROI(Structure):
         ("r", c_int32),
         ("question", c_int32),
         ("option", c_int32),
+        ("selection_mode", c_int32),
     ]
 
 
@@ -171,6 +172,10 @@ class OMR_Result(Structure):
         ("graded_questions", c_int32),
         ("n_answers", c_int32),
         ("answers", POINTER(c_int32)),
+        ("n_selected_option_flags", c_int32),
+        ("selected_option_flags", POINTER(c_int32)),
+        ("n_question_statuses", c_int32),
+        ("question_statuses", POINTER(c_int32)),
         ("n_metadata_selected_rows", c_int32),
         ("metadata_selected_rows", POINTER(c_int32)),
         ("used_abs_th", c_float),
@@ -232,11 +237,11 @@ def draw_annulus(
 def run_cpp(
     lib: ctypes.CDLL,
     gray: np.ndarray,
-    rois_cpp: List[Tuple[int, int, int, int, int]],
+    rois_cpp: List[Tuple[int, int, int, int, int, int]],
     answer_key: List[int],
     abs_th: float,
     rel_th: float,
-) -> Tuple[List[int], int]:
+) -> dict:
     h, w = gray.shape
     gray = np.ascontiguousarray(gray, dtype=np.uint8)
 
@@ -249,8 +254,15 @@ def run_cpp(
     )
 
     roi_arr = (OMR_CircleROI * len(rois_cpp))()
-    for i, (cx, cy, r, q, opt) in enumerate(rois_cpp):
-        roi_arr[i] = OMR_CircleROI(cx=cx, cy=cy, r=r, question=q, option=opt)
+    for i, (cx, cy, r, q, opt, selection_mode) in enumerate(rois_cpp):
+        roi_arr[i] = OMR_CircleROI(
+            cx=cx,
+            cy=cy,
+            r=r,
+            question=q,
+            option=opt,
+            selection_mode=selection_mode,
+        )
 
     key_arr = (c_int32 * len(answer_key))(*answer_key)
 
@@ -310,7 +322,32 @@ def run_cpp(
             msg = bytes(result.error_message).split(b"\x00", 1)[0].decode("utf-8", errors="ignore")
             raise RuntimeError(f"omr_process failed rc={rc} msg={msg}")
         answers = [result.answers[i] for i in range(result.n_answers)]
-        return answers, int(result.score)
+        selected_options = []
+        for question in range(form.n_questions):
+            base = question * form.n_options_per_question
+            selected = [
+                option
+                for option in range(form.n_options_per_question)
+                if int(result.selected_option_flags[base + option]) != 0
+            ]
+            selected_options.append(selected)
+        status_names = {
+            0: "blank",
+            1: "single",
+            2: "multiple",
+            3: "invalid_multiple_on_single",
+            4: "uncertain",
+        }
+        question_statuses = [
+            status_names.get(int(result.question_statuses[i]), f"unknown_{int(result.question_statuses[i])}")
+            for i in range(result.n_question_statuses)
+        ]
+        return {
+            "answers": answers,
+            "selected_options": selected_options,
+            "question_statuses": question_statuses,
+            "score": int(result.score),
+        }
     finally:
         lib.omr_free_result(byref(result))
         lib.omr_destroy(handle)
@@ -322,7 +359,7 @@ def run_python_ref(
     answer_key: List[int],
     abs_th: float,
     rel_th: float,
-) -> Tuple[List[int], int]:
+) -> dict:
     proc = OMRProcessor(
         circle_rois=rois_py,
         answer_key=answer_key,
@@ -336,30 +373,39 @@ def run_python_ref(
     for roi in rois_py:
         score_cache[(roi.question, roi.option)] = proc._bubble_score(gray, roi.cx, roi.cy, roi.r)
 
-    answers = proc._detect_answers(score_cache)
+    answers, selected_options, question_statuses = proc._detect_answers(score_cache)
     score, _ = proc._grade(answers)
-    return answers, score
+    return {
+        "answers": answers,
+        "selected_options": selected_options,
+        "question_statuses": question_statuses,
+        "score": score,
+    }
 
 
 def run_scenario(
     lib: ctypes.CDLL,
     name: str,
     gray: np.ndarray,
-    rois_cpp: List[Tuple[int, int, int, int, int]],
+    rois_cpp: List[Tuple[int, int, int, int, int, int]],
     rois_py: List[CircleROI],
     answer_key: List[int],
     abs_th: float,
     rel_th: float,
 ) -> None:
-    cpp_answers, cpp_score = run_cpp(lib, gray, rois_cpp, answer_key, abs_th, rel_th)
-    py_answers, py_score = run_python_ref(gray, rois_py, answer_key, abs_th, rel_th)
+    cpp_result = run_cpp(lib, gray, rois_cpp, answer_key, abs_th, rel_th)
+    py_result = run_python_ref(gray, rois_py, answer_key, abs_th, rel_th)
 
-    if cpp_answers != py_answers or cpp_score != py_score:
+    if cpp_result != py_result:
         raise AssertionError(
-            f"[{name}] mismatch: C++ answers={cpp_answers}, score={cpp_score} | "
-            f"Python answers={py_answers}, score={py_score}"
+            f"[{name}] mismatch: C++={cpp_result} | Python={py_result}"
         )
-    print(f"[PASS] {name}: answers={cpp_answers}, score={cpp_score}")
+    print(
+        f"[PASS] {name}: answers={cpp_result['answers']}, "
+        f"statuses={cpp_result['question_statuses']}, "
+        f"selected={cpp_result['selected_options']}, "
+        f"score={cpp_result['score']}"
+    )
 
 
 def main() -> None:
@@ -368,8 +414,8 @@ def main() -> None:
     # Scenario 1: single marked option.
     gray1 = np.full((160, 260), 255, dtype=np.uint8)
     draw_annulus(gray1, 180, 80, 7, 14, 30)
-    rois_cpp_1 = [(80, 80, 16, 0, 0), (180, 80, 16, 0, 1)]
-    rois_py_1 = [CircleROI(80, 80, 16, 1, 0), CircleROI(180, 80, 16, 1, 1)]
+    rois_cpp_1 = [(80, 80, 16, 0, 0, 0), (180, 80, 16, 0, 1, 0)]
+    rois_py_1 = [CircleROI(80, 80, 16, 1, 0, "single"), CircleROI(180, 80, 16, 1, 1, "single")]
     run_scenario(
         lib,
         "single-marked",
@@ -385,8 +431,8 @@ def main() -> None:
     gray2 = np.full((160, 260), 255, dtype=np.uint8)
     draw_annulus(gray2, 80, 80, 7, 14, 40)
     draw_annulus(gray2, 180, 80, 7, 14, 40)
-    rois_cpp_2 = [(80, 80, 16, 0, 0), (180, 80, 16, 0, 1)]
-    rois_py_2 = [CircleROI(80, 80, 16, 1, 0), CircleROI(180, 80, 16, 1, 1)]
+    rois_cpp_2 = [(80, 80, 16, 0, 0, 0), (180, 80, 16, 0, 1, 0)]
+    rois_py_2 = [CircleROI(80, 80, 16, 1, 0, "single"), CircleROI(180, 80, 16, 1, 1, "single")]
     run_scenario(
         lib,
         "ambiguous",
@@ -396,6 +442,40 @@ def main() -> None:
         answer_key=[1],
         abs_th=0.12,
         rel_th=0.10,
+    )
+
+    # Scenario 3: multiple mode with two strong marks -> multiple.
+    gray3 = np.full((160, 260), 255, dtype=np.uint8)
+    draw_annulus(gray3, 80, 80, 7, 14, 40)
+    draw_annulus(gray3, 180, 80, 7, 14, 40)
+    rois_cpp_3 = [(80, 80, 16, 0, 0, 1), (180, 80, 16, 0, 1, 1)]
+    rois_py_3 = [CircleROI(80, 80, 16, 1, 0, "multiple"), CircleROI(180, 80, 16, 1, 1, "multiple")]
+    run_scenario(
+        lib,
+        "multiple-strong",
+        gray3,
+        rois_cpp_3,
+        rois_py_3,
+        answer_key=[1],
+        abs_th=0.12,
+        rel_th=0.10,
+    )
+
+    # Scenario 4: recovered second mark on multiple mode -> uncertain.
+    gray4 = np.full((160, 260), 255, dtype=np.uint8)
+    draw_annulus(gray4, 80, 80, 7, 14, 200)
+    draw_annulus(gray4, 180, 80, 7, 14, 210)
+    rois_cpp_4 = [(80, 80, 16, 0, 0, 1), (180, 80, 16, 0, 1, 1)]
+    rois_py_4 = [CircleROI(80, 80, 16, 1, 0, "multiple"), CircleROI(180, 80, 16, 1, 1, "multiple")]
+    run_scenario(
+        lib,
+        "multiple-recovered-uncertain",
+        gray4,
+        rois_cpp_4,
+        rois_py_4,
+        answer_key=[1],
+        abs_th=0.20,
+        rel_th=0.055,
     )
 
     print("[DONE] parity checks passed")

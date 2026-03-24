@@ -47,6 +47,19 @@ typedef enum OMR_BinarizeMethod {
     OMR_BINARIZE_SKELETON = 1
 } OMR_BinarizeMethod;
 
+typedef enum OMR_SelectionMode {
+    OMR_SELECTION_SINGLE = 0,
+    OMR_SELECTION_MULTIPLE = 1
+} OMR_SelectionMode;
+
+typedef enum OMR_QuestionStatus {
+    OMR_STATUS_BLANK = 0,
+    OMR_STATUS_SINGLE = 1,
+    OMR_STATUS_MULTIPLE = 2,
+    OMR_STATUS_INVALID_MULTIPLE_ON_SINGLE = 3,
+    OMR_STATUS_UNCERTAIN = 4
+} OMR_QuestionStatus;
+
 typedef struct OMR_ImageView {
     int32_t width;
     int32_t height;
@@ -78,6 +91,7 @@ typedef struct OMR_CircleROI {
     int32_t r;
     int32_t question;
     int32_t option;
+    int32_t selection_mode;
 } OMR_CircleROI;
 
 typedef struct OMR_MetadataField {
@@ -212,6 +226,12 @@ typedef struct OMR_Result {
 
     int32_t n_answers;
     int32_t* answers;
+
+    int32_t n_selected_option_flags;
+    int32_t* selected_option_flags;
+
+    int32_t n_question_statuses;
+    int32_t* question_statuses;
 
     int32_t n_metadata_selected_rows;
     int32_t* metadata_selected_rows;

@@ -84,6 +84,28 @@ class OMRProcessorTests(unittest.TestCase):
         self.assertEqual(answer, -1)
         self.assertEqual(status, "multiple")
 
+    def test_marks_uncertain_for_multiple_mode_when_second_mark_is_only_recovered(self) -> None:
+        processor = build_processor()
+        items = [(1, 0.26), (2, 0.19), (3, 0.05), (0, 0.02), (4, 0.01)]
+
+        filled = processor._detect_filled_options(items)
+        answer, status = processor._resolve_question_selection(items, filled, "multiple")
+
+        self.assertEqual(filled, [1, 2])
+        self.assertEqual(answer, -1)
+        self.assertEqual(status, "uncertain")
+
+    def test_keeps_single_for_multiple_mode_when_only_one_option_is_filled(self) -> None:
+        processor = build_processor()
+        items = [(1, 0.28), (2, 0.12), (3, 0.03), (0, 0.02), (4, 0.01)]
+
+        filled = processor._detect_filled_options(items)
+        answer, status = processor._resolve_question_selection(items, filled, "multiple")
+
+        self.assertEqual(filled, [1])
+        self.assertEqual(answer, 1)
+        self.assertEqual(status, "single")
+
     def test_rejects_inconsistent_selection_mode_within_question(self) -> None:
         rois = [
             CircleROI(cx=30, cy=30, r=10, question=1, option=0, selection_mode="single"),

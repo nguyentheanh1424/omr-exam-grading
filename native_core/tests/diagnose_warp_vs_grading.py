@@ -45,7 +45,7 @@ def compute_python_scores(omr: OMRProcessor, img) -> tuple[dict[tuple[int, int],
     score_cache = {}
     for roi in omr.circle_rois:
         score_cache[(roi.question, roi.option)] = omr._bubble_score(gray, roi.cx, roi.cy, roi.r)
-    answers = omr._detect_answers(score_cache)
+    answers, _, _ = omr._detect_answers(score_cache)
     score, _ = omr._grade(answers)
     return score_cache, answers, score
 

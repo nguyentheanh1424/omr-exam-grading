@@ -194,6 +194,8 @@ def main() -> None:
         "configured_abs_th": thresholds.abs_th,
         "configured_rel_th": thresholds.rel_th,
         "answers": result.answers,
+        "selected_options": result.selected_options,
+        "question_statuses": result.question_statuses,
         "detected_marker_count": 0 if detected_markers is None else len(detected_markers),
         "marker_source": "python" if detected_markers is not None else "native",
         "student_id": None,
