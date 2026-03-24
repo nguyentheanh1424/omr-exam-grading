@@ -9,8 +9,85 @@ import cv2 as cv
 import numpy as np
 from matplotlib import pyplot as plt
 
+# THRESHOLD CONSTANTS
 DEFAULT_ABS_TH = 0.12
 DEFAULT_REL_TH = 0.04
+
+# IMAGE PREPROCESSING CONSTANTS
+CLAHE_CLIP_LIMIT = 3.0
+CLAHE_TILE_SIZE = (8, 8)
+GAUSSIAN_KERNEL_SIZE = (3, 3)
+GAUSSIAN_SIGMA = 0
+
+# BUBBLE DETECTION CONSTANTS
+# Patch extraction
+PATCH_RADIUS_MULTIPLIER = 1.6
+
+# Fill region (the actual bubble marking area)
+FILL_INNER_RADIUS_RATIO = 0.45
+FILL_OUTER_RADIUS_RATIO = 0.85
+
+# Background region (annulus around the bubble)
+BG_INNER_RADIUS_RATIO = 1.05
+BG_OUTER_RADIUS_RATIO = 1.45
+
+# Minimum pixel count for valid measurement
+MIN_VALID_PIXELS = 20
+
+# AUTO-CALIBRATION CONSTANTS
+# Minimum questions needed for calibration
+MIN_QUESTIONS_FOR_CALIBRATION = 8
+
+# Percentile of data to use for baseline calculation
+CALIBRATION_PERCENTILE = 0.6
+
+# MAD multipliers for threshold calculation
+ABS_TH_MAD_MULTIPLIER = 6.5
+REL_TH_MAD_MULTIPLIER = 4.5
+
+# Baseline offsets
+ABS_TH_BASELINE_OFFSET = 0.015
+REL_TH_BASELINE_OFFSET = 0.004
+
+# Threshold bounds
+ABS_TH_MIN = 0.20
+ABS_TH_MAX = 0.40
+REL_TH_MIN = 0.015
+REL_TH_MAX = 0.25
+
+# VISUALIZATION CONSTANTS
+# Circle colors (BGR format)
+COLOR_GRAY = (160, 160, 160)
+COLOR_YELLOW = (0, 255, 255)  # Multiple answers detected
+COLOR_RED = (0, 0, 255)        # Wrong or missing answer
+COLOR_GREEN = (0, 255, 0)      # Correct answer
+
+# Circle thickness
+THICKNESS_NORMAL = 1
+THICKNESS_HIGHLIGHT = 3
+
+# Center dot size
+CENTER_DOT_RATIO = 6  # radius // 6
+
+# Score display
+SCORE_FONT = cv.FONT_HERSHEY_SIMPLEX
+SCORE_FONT_SCALE = 1.4
+SCORE_FONT_THICKNESS = 3
+SCORE_TEXT_X = 40
+SCORE_TEXT_Y = 70
+SCORE_PADDING = 12
+SCORE_BG_COLOR = (255, 255, 255)
+SCORE_BORDER_COLOR = (0, 0, 0)
+SCORE_TEXT_COLOR = (0, 0, 0)
+SCORE_BORDER_THICKNESS = 2
+
+# Debug heatmap
+HEATMAP_FONT = cv.FONT_HERSHEY_SIMPLEX
+HEATMAP_FONT_SCALE = 0.3
+HEATMAP_TEXT_COLOR = (255, 255, 255)
+HEATMAP_TEXT_THICKNESS = 1
+HEATMAP_TEXT_OFFSET_X = 15
+HEATMAP_TEXT_OFFSET_Y = 5
 
 
 @dataclass
@@ -72,8 +149,8 @@ class OMRProcessor:
                     "rel_th": self.rel_th,
                     "meta": {
                         "method": "annulus_patch_darkness",
-                        "r_in_ratio": 0.55,
-                        "r_out_ratio": 0.90,
+                        "r_in_ratio": FILL_INNER_RADIUS_RATIO,
+                        "r_out_ratio": FILL_OUTER_RADIUS_RATIO,
                     },
                 },
                 f,
@@ -83,18 +160,18 @@ class OMRProcessor:
     @staticmethod
     def _prep_gray(img: np.ndarray) -> np.ndarray:
         gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-        gray = cv.createCLAHE(3.0, (8, 8)).apply(gray)
-        gray = cv.GaussianBlur(gray, (3, 3), 0)
+        gray = cv.createCLAHE(CLAHE_CLIP_LIMIT, CLAHE_TILE_SIZE).apply(gray)
+        gray = cv.GaussianBlur(gray, GAUSSIAN_KERNEL_SIZE, GAUSSIAN_SIGMA)
         return gray
 
     @staticmethod
     def _bubble_score(gray: np.ndarray, cx: int, cy: int, r: int) -> float:
         h, w = gray.shape[:2]
 
-        x0 = max(cx - int(1.6 * r), 0)
-        y0 = max(cy - int(1.6 * r), 0)
-        x1 = min(cx + int(1.6 * r), w)
-        y1 = min(cy + int(1.6 * r), h)
+        x0 = max(cx - int(PATCH_RADIUS_MULTIPLIER * r), 0)
+        y0 = max(cy - int(PATCH_RADIUS_MULTIPLIER * r), 0)
+        x1 = min(cx + int(PATCH_RADIUS_MULTIPLIER * r), w)
+        y1 = min(cy + int(PATCH_RADIUS_MULTIPLIER * r), h)
 
         patch = gray[y0:y1, x0:x1].astype(np.float32)
         ph, pw = patch.shape[:2]
@@ -102,10 +179,10 @@ class OMRProcessor:
         pcx = cx - x0
         pcy = cy - y0
 
-        r_fill_in = int(0.45 * r)
-        r_fill_out = int(0.85 * r)
-        r_bg_in = int(1.05 * r)
-        r_bg_out = int(1.45 * r)
+        r_fill_in = int(FILL_INNER_RADIUS_RATIO * r)
+        r_fill_out = int(FILL_OUTER_RADIUS_RATIO * r)
+        r_bg_in = int(BG_INNER_RADIUS_RATIO * r)
+        r_bg_out = int(BG_OUTER_RADIUS_RATIO * r)
 
         mask_fill = np.zeros((ph, pw), np.uint8)
         mask_bg = np.zeros((ph, pw), np.uint8)
@@ -119,13 +196,12 @@ class OMRProcessor:
         fill_vals = patch[mask_fill > 0]
         bg_vals = patch[mask_bg > 0]
 
-        if fill_vals.size < 20 or bg_vals.size < 20:
+        if fill_vals.size < MIN_VALID_PIXELS or bg_vals.size < MIN_VALID_PIXELS:
             return 0.0
 
         fill_dark = 1.0 - (fill_vals.mean() / 255.0)
         bg_dark = 1.0 - (bg_vals.mean() / 255.0)
 
-        # QUAN TRỌNG: so sánh tương đối
         return max(0.0, fill_dark - bg_dark)
 
     @staticmethod
@@ -149,24 +225,24 @@ class OMRProcessor:
             best_vals.append(scores[0])
             delta_vals.append(scores[0] - scores[1])
 
-        if len(best_vals) < 8:
+        if len(best_vals) < MIN_QUESTIONS_FOR_CALIBRATION:
             return
 
         best_arr = np.array(best_vals, np.float32)
         delta_arr = np.array(delta_vals, np.float32)
 
-        k = max(3, int(0.6 * len(best_arr)))
+        k = max(3, int(CALIBRATION_PERCENTILE * len(best_arr)))
 
         base_best = np.sort(best_arr)[:k]
         base_delta = np.sort(delta_arr)[:k]
 
         self.abs_th = float(np.clip(
-            np.median(base_best) + 6.5 * self._mad(base_best) + 0.015,
-            0.05, 0.40
+            np.median(base_best) + ABS_TH_MAD_MULTIPLIER * self._mad(base_best) + ABS_TH_BASELINE_OFFSET,
+            ABS_TH_MIN, ABS_TH_MAX
         ))
         self.rel_th = float(np.clip(
-            np.median(base_delta) + 4.5 * self._mad(base_delta) + 0.004,
-            0.015, 0.25
+            np.median(base_delta) + REL_TH_MAD_MULTIPLIER * self._mad(base_delta) + REL_TH_BASELINE_OFFSET,
+            REL_TH_MIN, REL_TH_MAX
         ))
 
         self._save_thresholds()
@@ -238,28 +314,28 @@ class OMRProcessor:
                 (best_val - second_val) < self.rel_th
             )
 
-            color = (160, 160, 160)
-            thick = 1
+            color = COLOR_GRAY
+            thick = THICKNESS_NORMAL
 
             if is_multi:
                 if roi.option == best_opt or roi.option == second_opt:
-                    color, thick = (0, 255, 255), 3
+                    color, thick = COLOR_YELLOW, THICKNESS_HIGHLIGHT
 
             elif detected == -1:
                 if gt is not None and roi.option == gt:
-                    color, thick = (0, 0, 255), 3
+                    color, thick = COLOR_RED, THICKNESS_HIGHLIGHT
 
             elif detected == roi.option:
                 if gt is not None and detected == gt:
-                    color, thick = (0, 255, 0), 3
+                    color, thick = COLOR_GREEN, THICKNESS_HIGHLIGHT
                 else:
-                    color, thick = (0, 0, 255), 3
+                    color, thick = COLOR_RED, THICKNESS_HIGHLIGHT
 
             cx = int(np.clip(roi.cx, roi.r, w - roi.r - 1))
             cy = int(np.clip(roi.cy, roi.r, h - roi.r - 1))
 
             cv.circle(vis, (cx, cy), roi.r, color, thick)
-            cv.circle(vis, (cx, cy), max(1, roi.r // 6), color, -1)
+            cv.circle(vis, (cx, cy), max(1, roi.r // CENTER_DOT_RATIO), color, -1)
 
         return vis
 
@@ -269,20 +345,27 @@ class OMRProcessor:
         text = f"SCORE: {score}/{total}"
 
         (tw, th), _ = cv.getTextSize(
-            text, cv.FONT_HERSHEY_SIMPLEX, 1.4, 3
+            text, SCORE_FONT, SCORE_FONT_SCALE, SCORE_FONT_THICKNESS
         )
-        x, y, p = 40, 70, 12
 
-        cv.rectangle(vis, (x - p, y - th - p),
-                      (x + tw + p, y + p),
-                      (255, 255, 255), -1)
-        cv.rectangle(vis, (x - p, y - th - p),
-                      (x + tw + p, y + p),
-                      (0, 0, 0), 2)
+        cv.rectangle(
+            vis,
+            (SCORE_TEXT_X - SCORE_PADDING, SCORE_TEXT_Y - th - SCORE_PADDING),
+            (SCORE_TEXT_X + tw + SCORE_PADDING, SCORE_TEXT_Y + SCORE_PADDING),
+            SCORE_BG_COLOR,
+            -1
+        )
+        cv.rectangle(
+            vis,
+            (SCORE_TEXT_X - SCORE_PADDING, SCORE_TEXT_Y - th - SCORE_PADDING),
+            (SCORE_TEXT_X + tw + SCORE_PADDING, SCORE_TEXT_Y + SCORE_PADDING),
+            SCORE_BORDER_COLOR,
+            SCORE_BORDER_THICKNESS
+        )
         cv.putText(
-            vis, text, (x, y),
-            cv.FONT_HERSHEY_SIMPLEX, 1.4,
-            (0, 0, 0), 3, cv.LINE_AA
+            vis, text, (SCORE_TEXT_X, SCORE_TEXT_Y),
+            SCORE_FONT, SCORE_FONT_SCALE,
+            SCORE_TEXT_COLOR, SCORE_FONT_THICKNESS, cv.LINE_AA
         )
         return vis
 
@@ -309,17 +392,19 @@ class OMRProcessor:
         if debug:
             score_img = a4_img.copy()
 
-            for (q, opt), score in score_cache.items():
+            for (q, opt), bubble_score_value in score_cache.items():
                 roi = [r for r in self.circle_rois if r.question == q and r.option == opt][0]
 
-                # Color by score: white (0) → red (high)
-                intensity = int(score * 255)
+                intensity = int(bubble_score_value * 255)
                 color = (0, 0, intensity)
 
                 cv.circle(score_img, (roi.cx, roi.cy), roi.r, color, -1)
-                cv.putText(score_img, f"{score:.2f}",
-                           (roi.cx - 15, roi.cy + 5),
-                           cv.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
+                cv.putText(
+                    score_img, f"{bubble_score_value:.2f}",
+                    (roi.cx - HEATMAP_TEXT_OFFSET_X, roi.cy + HEATMAP_TEXT_OFFSET_Y),
+                    HEATMAP_FONT, HEATMAP_FONT_SCALE, HEATMAP_TEXT_COLOR,
+                    HEATMAP_TEXT_THICKNESS
+                )
 
             cv.imwrite(f"{output}/omr_2_score_heatmap.png", score_img)
 
