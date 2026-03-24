@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, asdict
+from pathlib import Path
 from typing import List, Tuple
 
 import cv2 as cv
@@ -433,8 +434,9 @@ class CircleGridEditorApp:
 # ====== CLI ======
 def main():
     import argparse
+    repo_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description="Circle ROI Grid Editor (drag & drop, no zoom)")
-    parser.add_argument("image", nargs="?", default=os.path.join("../samples", "template_scan1.png"))
+    parser.add_argument("image", nargs="?", default=str(repo_root / "samples" / "template_scan1.png"))
     args = parser.parse_args()
     CircleGridEditorApp.run(args.image)
 
