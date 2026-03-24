@@ -1,0 +1,21 @@
+{
+  "debug_intermediate": false,
+  "summary_json": true,
+  "scored_image": false,
+  "bubble_fields": {
+    "enabled": true,
+    "overlay_image": false,
+    "values_json": false
+  },
+  "handwritten_review": {
+    "enabled": false,
+    "save_patches": false,
+    "save_merged_template": false,
+    "save_ink_mask": false,
+    "save_aligned_source_img": false,
+    "save_aligned_source_regions": false,
+    "save_template_merged_img": false,
+    "save_template_merged_regions": false,
+    "save_scored_img": false
+  }
+}

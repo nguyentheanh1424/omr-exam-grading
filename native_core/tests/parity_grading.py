@@ -45,6 +45,25 @@ class OMR_CircleROI(Structure):
     ]
 
 
+class OMR_MetadataField(Structure):
+    _fields_ = [
+        ("field_id", c_int32),
+        ("n_columns", c_int32),
+        ("n_rows", c_int32),
+    ]
+
+
+class OMR_MetadataBubble(Structure):
+    _fields_ = [
+        ("field_id", c_int32),
+        ("column", c_int32),
+        ("row", c_int32),
+        ("cx", c_int32),
+        ("cy", c_int32),
+        ("r", c_int32),
+    ]
+
+
 class OMR_FormSpec(Structure):
     _fields_ = [
         ("output_width", c_int32),
@@ -57,6 +76,10 @@ class OMR_FormSpec(Structure):
         ("n_region_windows", c_int32),
         ("circle_rois", POINTER(OMR_CircleROI)),
         ("n_circle_rois", c_int32),
+        ("metadata_fields", POINTER(OMR_MetadataField)),
+        ("n_metadata_fields", c_int32),
+        ("metadata_bubbles", POINTER(OMR_MetadataBubble)),
+        ("n_metadata_bubbles", c_int32),
         ("n_questions", c_int32),
         ("n_options_per_question", c_int32),
         ("answer_key", POINTER(c_int32)),
@@ -148,6 +171,8 @@ class OMR_Result(Structure):
         ("graded_questions", c_int32),
         ("n_answers", c_int32),
         ("answers", POINTER(c_int32)),
+        ("n_metadata_selected_rows", c_int32),
+        ("metadata_selected_rows", POINTER(c_int32)),
         ("used_abs_th", c_float),
         ("used_rel_th", c_float),
         ("scored_image_data", POINTER(c_uint8)),
@@ -240,6 +265,10 @@ def run_cpp(
     form.n_region_windows = 0
     form.circle_rois = roi_arr
     form.n_circle_rois = len(rois_cpp)
+    form.metadata_fields = None
+    form.n_metadata_fields = 0
+    form.metadata_bubbles = None
+    form.n_metadata_bubbles = 0
     form.n_questions = len(answer_key)
     form.n_options_per_question = 2
     form.answer_key = key_arr

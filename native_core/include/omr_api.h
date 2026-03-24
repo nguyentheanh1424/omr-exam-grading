@@ -80,6 +80,21 @@ typedef struct OMR_CircleROI {
     int32_t option;
 } OMR_CircleROI;
 
+typedef struct OMR_MetadataField {
+    int32_t field_id;
+    int32_t n_columns;
+    int32_t n_rows;
+} OMR_MetadataField;
+
+typedef struct OMR_MetadataBubble {
+    int32_t field_id;
+    int32_t column;
+    int32_t row;
+    int32_t cx;
+    int32_t cy;
+    int32_t r;
+} OMR_MetadataBubble;
+
 typedef struct OMR_FormSpec {
     int32_t output_width;
     int32_t output_height;
@@ -95,6 +110,12 @@ typedef struct OMR_FormSpec {
 
     const OMR_CircleROI* circle_rois;
     int32_t n_circle_rois;
+
+    const OMR_MetadataField* metadata_fields;
+    int32_t n_metadata_fields;
+
+    const OMR_MetadataBubble* metadata_bubbles;
+    int32_t n_metadata_bubbles;
 
     int32_t n_questions;
     int32_t n_options_per_question;
@@ -191,6 +212,9 @@ typedef struct OMR_Result {
 
     int32_t n_answers;
     int32_t* answers;
+
+    int32_t n_metadata_selected_rows;
+    int32_t* metadata_selected_rows;
 
     float used_abs_th;
     float used_rel_th;

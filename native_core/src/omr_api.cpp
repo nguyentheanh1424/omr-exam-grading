@@ -124,7 +124,8 @@ bool validate_form(
         copy_error_message(err, "form circle_rois is missing");
         return false;
     }
-    if (form->n_template_markers < 0 || form->n_detected_markers < 0 || form->n_region_windows < 0) {
+    if (form->n_template_markers < 0 || form->n_detected_markers < 0 || form->n_region_windows < 0 ||
+        form->n_metadata_fields < 0 || form->n_metadata_bubbles < 0) {
         copy_error_message(err, "marker counts must be >= 0");
         return false;
     }
@@ -138,6 +139,14 @@ bool validate_form(
     }
     if (form->n_region_windows > 0 && form->region_windows == nullptr) {
         copy_error_message(err, "region_windows pointer is null");
+        return false;
+    }
+    if (form->n_metadata_fields > 0 && form->metadata_fields == nullptr) {
+        copy_error_message(err, "metadata_fields pointer is null");
+        return false;
+    }
+    if (form->n_metadata_bubbles > 0 && form->metadata_bubbles == nullptr) {
+        copy_error_message(err, "metadata_bubbles pointer is null");
         return false;
     }
     if (form->answer_key == nullptr) {
@@ -291,6 +300,101 @@ bool validate_form(
         if (rois_per_question[static_cast<size_t>(q)] != form->n_options_per_question) {
             copy_error_message(err, "each question must provide exactly n_options_per_question ROIs");
             return false;
+        }
+    }
+
+    std::vector<int32_t> metadata_field_ids;
+    metadata_field_ids.reserve(static_cast<size_t>(form->n_metadata_fields));
+    size_t metadata_total = 0;
+    for (int32_t i = 0; i < form->n_metadata_fields; ++i) {
+        const OMR_MetadataField& field = form->metadata_fields[i];
+        if (field.n_columns <= 0 || field.n_rows <= 0) {
+            copy_error_message(err, "metadata field dims must be > 0");
+            return false;
+        }
+        if (std::find(metadata_field_ids.begin(), metadata_field_ids.end(), field.field_id) != metadata_field_ids.end()) {
+            copy_error_message(err, "duplicate metadata field id");
+            return false;
+        }
+        metadata_field_ids.push_back(field.field_id);
+        if (!checked_mul_size_t(
+                static_cast<size_t>(field.n_columns),
+                static_cast<size_t>(field.n_rows),
+                &seen_size)) {
+            copy_error_message(err, "metadata field cardinality overflow");
+            return false;
+        }
+        metadata_total += seen_size;
+    }
+
+    std::vector<uint8_t> metadata_seen(metadata_total, 0);
+    std::vector<size_t> metadata_offsets(static_cast<size_t>(form->n_metadata_fields), 0);
+    size_t running_offset = 0;
+    for (int32_t i = 0; i < form->n_metadata_fields; ++i) {
+        metadata_offsets[static_cast<size_t>(i)] = running_offset;
+        const OMR_MetadataField& field = form->metadata_fields[i];
+        size_t field_size = 0;
+        checked_mul_size_t(
+            static_cast<size_t>(field.n_columns),
+            static_cast<size_t>(field.n_rows),
+            &field_size
+        );
+        running_offset += field_size;
+    }
+
+    auto metadata_index_for_id = [&](int32_t field_id) -> int32_t {
+        for (int32_t i = 0; i < form->n_metadata_fields; ++i) {
+            if (form->metadata_fields[i].field_id == field_id) {
+                return i;
+            }
+        }
+        return -1;
+    };
+
+    for (int32_t i = 0; i < form->n_metadata_bubbles; ++i) {
+        const OMR_MetadataBubble& bubble = form->metadata_bubbles[i];
+        if (bubble.r <= 0) {
+            copy_error_message(err, "metadata bubble radius must be > 0");
+            return false;
+        }
+        const int32_t field_idx = metadata_index_for_id(bubble.field_id);
+        if (field_idx < 0) {
+            copy_error_message(err, "metadata bubble references unknown field id");
+            return false;
+        }
+        const OMR_MetadataField& field = form->metadata_fields[field_idx];
+        if (bubble.column < 0 || bubble.column >= field.n_columns ||
+            bubble.row < 0 || bubble.row >= field.n_rows) {
+            copy_error_message(err, "metadata bubble row/column out of range");
+            return false;
+        }
+        if (bubble.cx - bubble.r < 0 || bubble.cx + bubble.r >= roi_width_limit ||
+            bubble.cy - bubble.r < 0 || bubble.cy + bubble.r >= roi_height_limit) {
+            copy_error_message(err, "metadata bubble exceeds image bounds");
+            return false;
+        }
+
+        const size_t field_offset = metadata_offsets[static_cast<size_t>(field_idx)];
+        const size_t idx = field_offset +
+                           static_cast<size_t>(bubble.column) * static_cast<size_t>(field.n_rows) +
+                           static_cast<size_t>(bubble.row);
+        if (metadata_seen[idx] != 0) {
+            copy_error_message(err, "duplicate metadata bubble (field, column, row)");
+            return false;
+        }
+        metadata_seen[idx] = 1;
+    }
+
+    for (int32_t i = 0; i < form->n_metadata_fields; ++i) {
+        const OMR_MetadataField& field = form->metadata_fields[i];
+        const size_t field_offset = metadata_offsets[static_cast<size_t>(i)];
+        const size_t field_size =
+            static_cast<size_t>(field.n_columns) * static_cast<size_t>(field.n_rows);
+        for (size_t k = 0; k < field_size; ++k) {
+            if (metadata_seen[field_offset + k] == 0) {
+                copy_error_message(err, "each metadata field must provide a full bubble grid");
+                return false;
+            }
         }
     }
 
@@ -465,10 +569,10 @@ float bubble_score(
     const OMR_CircleROI& roi,
     const OMR_GradingParams& g
 ) {
-    const int32_t r_fill_in = std::max(0, static_cast<int32_t>(std::round(g.fill_inner_ratio * roi.r)));
-    const int32_t r_fill_out = std::max(0, static_cast<int32_t>(std::round(g.fill_outer_ratio * roi.r)));
-    const int32_t r_bg_in = std::max(0, static_cast<int32_t>(std::round(g.bg_inner_ratio * roi.r)));
-    const int32_t r_bg_out = std::max(0, static_cast<int32_t>(std::round(g.bg_outer_ratio * roi.r)));
+    const int32_t r_fill_in = std::max(0, static_cast<int32_t>(g.fill_inner_ratio * roi.r));
+    const int32_t r_fill_out = std::max(0, static_cast<int32_t>(g.fill_outer_ratio * roi.r));
+    const int32_t r_bg_in = std::max(0, static_cast<int32_t>(g.bg_inner_ratio * roi.r));
+    const int32_t r_bg_out = std::max(0, static_cast<int32_t>(g.bg_outer_ratio * roi.r));
 
     const int32_t r_max = std::max(r_fill_out, r_bg_out);
     const int32_t x0 = std::max(0, roi.cx - r_max);
@@ -553,11 +657,16 @@ void omr_free_result(OMR_Result* out_result) {
         std::free(out_result->answers);
         out_result->answers = nullptr;
     }
+    if (out_result->metadata_selected_rows != nullptr) {
+        std::free(out_result->metadata_selected_rows);
+        out_result->metadata_selected_rows = nullptr;
+    }
     if (out_result->scored_image_data != nullptr) {
         std::free(out_result->scored_image_data);
         out_result->scored_image_data = nullptr;
     }
     out_result->n_answers = 0;
+    out_result->n_metadata_selected_rows = 0;
     out_result->scored_image_width = 0;
     out_result->scored_image_height = 0;
     out_result->scored_image_stride = 0;
@@ -581,8 +690,8 @@ void omr_init_default_warp_params(OMR_WarpParams* out_params) {
     out_params->global_idw_power = 2.5f;
     out_params->global_idw_eps = 1e-3f;
 
-    out_params->patch_idw_grid_w = 12;
-    out_params->patch_idw_grid_h = 12;
+    out_params->patch_idw_grid_w = 24;
+    out_params->patch_idw_grid_h = 24;
     out_params->patch_idw_power = 4.0f;
     out_params->patch_idw_eps = 1e-3f;
 
@@ -769,6 +878,7 @@ int32_t omr_process(
                     working_image,
                     process_form,
                     *warp_params,
+                    *bin_params,
                     h_src_to_dst,
                     &region_storage,
                     &region_view,
@@ -818,6 +928,85 @@ int32_t omr_process(
         }
     }
 
+    size_t metadata_selection_count = 0;
+    for (int32_t i = 0; i < form->n_metadata_fields; ++i) {
+        metadata_selection_count += static_cast<size_t>(form->metadata_fields[i].n_columns);
+    }
+
+    int32_t* metadata_selected_rows = nullptr;
+    if (metadata_selection_count > 0) {
+        metadata_selected_rows = static_cast<int32_t*>(
+            std::malloc(sizeof(int32_t) * metadata_selection_count)
+        );
+        if (metadata_selected_rows == nullptr) {
+            std::free(out_result->answers);
+            out_result->answers = nullptr;
+            out_result->n_answers = 0;
+            return set_error(out_result, OMR_ERR_ALLOCATION_FAILED, "failed to allocate metadata selections");
+        }
+        for (size_t i = 0; i < metadata_selection_count; ++i) {
+            metadata_selected_rows[i] = -1;
+        }
+
+        std::vector<size_t> metadata_offsets(static_cast<size_t>(form->n_metadata_fields), 0);
+        std::vector<float> metadata_best_val(metadata_selection_count, kLargeNegative);
+        std::vector<float> metadata_second_val(metadata_selection_count, kLargeNegative);
+        std::vector<int32_t> metadata_best_row(metadata_selection_count, -1);
+
+        size_t running_offset = 0;
+        for (int32_t i = 0; i < form->n_metadata_fields; ++i) {
+            metadata_offsets[static_cast<size_t>(i)] = running_offset;
+            running_offset += static_cast<size_t>(form->metadata_fields[i].n_columns);
+        }
+
+        auto metadata_index_for_id = [&](int32_t field_id) -> int32_t {
+            for (int32_t i = 0; i < form->n_metadata_fields; ++i) {
+                if (form->metadata_fields[i].field_id == field_id) {
+                    return i;
+                }
+            }
+            return -1;
+        };
+
+        for (int32_t i = 0; i < form->n_metadata_bubbles; ++i) {
+            const OMR_MetadataBubble& bubble = form->metadata_bubbles[i];
+            const int32_t field_idx = metadata_index_for_id(bubble.field_id);
+            if (field_idx < 0) {
+                continue;
+            }
+            const OMR_CircleROI roi{
+                bubble.cx,
+                bubble.cy,
+                bubble.r,
+                bubble.column,
+                bubble.row,
+            };
+            const float s = bubble_score(working_image, roi, *grading_params);
+            const size_t selection_idx =
+                metadata_offsets[static_cast<size_t>(field_idx)] + static_cast<size_t>(bubble.column);
+            if (s > metadata_best_val[selection_idx]) {
+                metadata_second_val[selection_idx] = metadata_best_val[selection_idx];
+                metadata_best_val[selection_idx] = s;
+                metadata_best_row[selection_idx] = bubble.row;
+            } else if (s > metadata_second_val[selection_idx]) {
+                metadata_second_val[selection_idx] = s;
+            }
+        }
+
+        for (int32_t i = 0; i < form->n_metadata_fields; ++i) {
+            const OMR_MetadataField& field = form->metadata_fields[i];
+            const size_t field_offset = metadata_offsets[static_cast<size_t>(i)];
+            for (int32_t col = 0; col < field.n_columns; ++col) {
+                const size_t selection_idx = field_offset + static_cast<size_t>(col);
+                if (metadata_best_row[selection_idx] >= 0 &&
+                    metadata_best_val[selection_idx] >= grading_params->abs_th &&
+                    (metadata_best_val[selection_idx] - metadata_second_val[selection_idx]) >= grading_params->rel_th) {
+                    metadata_selected_rows[selection_idx] = metadata_best_row[selection_idx];
+                }
+            }
+        }
+    }
+
     int32_t score = 0;
     int32_t graded_questions = 0;
     for (int32_t q = 0; q < form->n_questions; ++q) {
@@ -833,6 +1022,8 @@ int32_t omr_process(
 
     out_result->answers = answers;
     out_result->n_answers = form->n_questions;
+    out_result->metadata_selected_rows = metadata_selected_rows;
+    out_result->n_metadata_selected_rows = static_cast<int32_t>(metadata_selection_count);
     out_result->score = score;
     out_result->total_questions = form->n_questions;
     out_result->graded_questions = graded_questions;
@@ -848,6 +1039,11 @@ int32_t omr_process(
             std::free(out_result->answers);
             out_result->answers = nullptr;
             out_result->n_answers = 0;
+            if (out_result->metadata_selected_rows != nullptr) {
+                std::free(out_result->metadata_selected_rows);
+                out_result->metadata_selected_rows = nullptr;
+                out_result->n_metadata_selected_rows = 0;
+            }
             return set_error(out_result, OMR_ERR_BAD_IMAGE, "image size overflow");
         }
 
@@ -856,6 +1052,11 @@ int32_t omr_process(
             std::free(out_result->answers);
             out_result->answers = nullptr;
             out_result->n_answers = 0;
+            if (out_result->metadata_selected_rows != nullptr) {
+                std::free(out_result->metadata_selected_rows);
+                out_result->metadata_selected_rows = nullptr;
+                out_result->n_metadata_selected_rows = 0;
+            }
             return set_error(out_result, OMR_ERR_ALLOCATION_FAILED, "failed to allocate scored image");
         }
 

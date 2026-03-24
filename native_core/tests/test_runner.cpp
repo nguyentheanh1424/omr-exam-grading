@@ -1,5 +1,7 @@
 #include "omr_api.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -11,6 +13,18 @@ namespace {
 struct TestContext {
     int passed = 0;
     int failed = 0;
+};
+
+constexpr int kAprilTagMarkerSize = 4;
+constexpr int kAprilTagBorderSize = 1;
+constexpr int kAprilTagGridSize = kAprilTagMarkerSize + 2 * kAprilTagBorderSize;
+
+constexpr std::array<uint16_t, 30> kAprilTag16h5Codes = {
+    0xD8C4u, 0xA574u, 0x562Cu, 0x9DA2u, 0x659Eu, 0xD6FEu,
+    0x1ACDu, 0xA2E7u, 0x9A7Fu, 0xB6A8u, 0xD01Cu, 0xD50Fu,
+    0x21B0u, 0x6CE2u, 0x4E31u, 0x08F5u, 0x3C90u, 0x2DC9u,
+    0xC0A5u, 0xF162u, 0xEC87u, 0xA9EAu, 0x42FBu, 0xB838u,
+    0x3B97u, 0xB5CEu, 0xFAB5u, 0x0CABu, 0x53E0u, 0x74F5u,
 };
 
 void assert_true(TestContext& ctx, bool condition, const char* message) {
@@ -67,6 +81,79 @@ void draw_square_ring(
                 (y - y0 < thickness) || (y1 - y < thickness);
             if (border) {
                 img[static_cast<size_t>(y) * static_cast<size_t>(stride) + static_cast<size_t>(x)] = value;
+            }
+        }
+    }
+}
+
+bool apriltag_white_bit(uint16_t code, int row, int col) {
+    const int bit_idx = row * kAprilTagMarkerSize + col;
+    return (code & static_cast<uint16_t>(1u << (15 - bit_idx))) != 0u;
+}
+
+uint8_t apriltag_cell_value(uint16_t code, int cell_y, int cell_x) {
+    if (cell_x == 0 || cell_x == (kAprilTagGridSize - 1) ||
+        cell_y == 0 || cell_y == (kAprilTagGridSize - 1)) {
+        return 0u;
+    }
+
+    const int bit_y = cell_y - kAprilTagBorderSize;
+    const int bit_x = cell_x - kAprilTagBorderSize;
+    return apriltag_white_bit(code, bit_y, bit_x) ? 255u : 0u;
+}
+
+uint8_t rotated_apriltag_cell_value(uint16_t code, int cell_y, int cell_x, int quarter_turns_cw) {
+    const int rot = ((quarter_turns_cw % 4) + 4) % 4;
+    int src_y = cell_y;
+    int src_x = cell_x;
+    if (rot == 1) {
+        src_y = kAprilTagGridSize - 1 - cell_x;
+        src_x = cell_y;
+    } else if (rot == 2) {
+        src_y = kAprilTagGridSize - 1 - cell_y;
+        src_x = kAprilTagGridSize - 1 - cell_x;
+    } else if (rot == 3) {
+        src_y = cell_x;
+        src_x = kAprilTagGridSize - 1 - cell_y;
+    }
+    return apriltag_cell_value(code, src_y, src_x);
+}
+
+void draw_apriltag16h5(
+    std::vector<uint8_t>& img,
+    int width,
+    int height,
+    int stride,
+    int cx,
+    int cy,
+    int id,
+    int cell_size,
+    int quarter_turns_cw
+) {
+    if (id < 0 || id >= static_cast<int>(kAprilTag16h5Codes.size()) || cell_size <= 0) {
+        return;
+    }
+
+    const uint16_t code = kAprilTag16h5Codes[static_cast<size_t>(id)];
+    const int tag_size = kAprilTagGridSize * cell_size;
+    const int x0 = cx - tag_size / 2;
+    const int y0 = cy - tag_size / 2;
+
+    for (int cell_y = 0; cell_y < kAprilTagGridSize; ++cell_y) {
+        for (int cell_x = 0; cell_x < kAprilTagGridSize; ++cell_x) {
+            const uint8_t value = rotated_apriltag_cell_value(code, cell_y, cell_x, quarter_turns_cw);
+            const int px0 = x0 + cell_x * cell_size;
+            const int py0 = y0 + cell_y * cell_size;
+            for (int py = py0; py < py0 + cell_size; ++py) {
+                if (py < 0 || py >= height) {
+                    continue;
+                }
+                for (int px = px0; px < px0 + cell_size; ++px) {
+                    if (px < 0 || px >= width) {
+                        continue;
+                    }
+                    img[static_cast<size_t>(py) * static_cast<size_t>(stride) + static_cast<size_t>(px)] = value;
+                }
             }
         }
     }
@@ -483,6 +570,71 @@ void test_warp_auto_detect_success(TestContext& ctx) {
     omr_destroy(h);
 }
 
+void test_warp_apriltag_auto_detect_success(TestContext& ctx) {
+    std::vector<uint8_t> image_storage;
+    OMR_ImageView image = make_image(&image_storage, 360, 260);
+
+    draw_dark_annulus(image_storage, image.width, image.height, image.stride, 240, 130, 7, 14, 30u);
+    draw_apriltag16h5(image_storage, image.width, image.height, image.stride, 46, 46, 1, 12, 0);
+    draw_apriltag16h5(image_storage, image.width, image.height, image.stride, 46, 214, 2, 12, 1);
+    draw_apriltag16h5(image_storage, image.width, image.height, image.stride, 314, 46, 3, 12, 2);
+    draw_apriltag16h5(image_storage, image.width, image.height, image.stride, 314, 214, 4, 12, 3);
+
+    OMR_CircleROI rois[2]{};
+    rois[0] = {120, 130, 16, 0, 0};
+    rois[1] = {240, 130, 16, 0, 1};
+    int32_t key[1] = {1};
+
+    OMR_MarkerTemplate markers[4]{};
+    markers[0] = {1, 46.f, 46.f};
+    markers[1] = {2, 46.f, 214.f};
+    markers[2] = {3, 314.f, 46.f};
+    markers[3] = {4, 314.f, 214.f};
+
+    OMR_RegionWindow windows[1]{};
+    windows[0].marker_ids[0] = 1;
+    windows[0].marker_ids[1] = 2;
+    windows[0].marker_ids[2] = 3;
+    windows[0].marker_ids[3] = 4;
+    windows[0].n_marker_ids = 4;
+
+    OMR_FormSpec form{};
+    form.output_width = image.width;
+    form.output_height = image.height;
+    form.template_markers = markers;
+    form.n_template_markers = 4;
+    form.region_windows = windows;
+    form.n_region_windows = 1;
+    form.circle_rois = rois;
+    form.n_circle_rois = 2;
+    form.n_questions = 1;
+    form.n_options_per_question = 2;
+    form.answer_key = key;
+    form.n_answer_key = 1;
+
+    OMR_WarpParams warp{};
+    OMR_BinarizeParams bin{};
+    OMR_GradingParams grading{};
+    OMR_RuntimeOptions runtime{};
+    setup_defaults(&warp, &bin, &grading, &runtime);
+    runtime.assume_aligned_input = 0;
+    warp.use_global_idw = 0;
+    warp.use_region_refine = 0;
+
+    OMR_Result out{};
+    omr_init_result(&out);
+    OMR_Handle* h = omr_create();
+
+    const int32_t rc = omr_process(h, &image, &form, &warp, &bin, &grading, &runtime, &out);
+    assert_true(ctx, rc == OMR_OK, "warp auto detect should succeed on synthetic AprilTag 16h5 markers");
+    if (out.answers != nullptr) {
+        assert_true(ctx, out.answers[0] == 1, "AprilTag auto detect should preserve answer");
+    }
+
+    omr_free_result(&out);
+    omr_destroy(h);
+}
+
 void test_warp_with_global_idw_smoke(TestContext& ctx) {
     std::vector<uint8_t> image_storage;
     OMR_ImageView image = make_image(&image_storage, 260, 160);
@@ -635,6 +787,7 @@ int main() {
     test_warp_missing_markers_fails(ctx);
     test_warp_identity_success(ctx);
     test_warp_auto_detect_success(ctx);
+    test_warp_apriltag_auto_detect_success(ctx);
     test_warp_with_global_idw_smoke(ctx);
     test_region_refine_smoke(ctx);
 
