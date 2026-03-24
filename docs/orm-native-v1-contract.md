@@ -4,6 +4,14 @@
 
 - `BE -> Python adapter -> Native core`
 
+Official runtime path:
+
+- `BE -> Python adapter -> Native raw warp + Native ORM/Grading`
+
+Fallback/debug path:
+
+- `BE -> Python adapter -> Python warp/prep + Native ORM/Grading`
+
 ## Input Ownership
 
 BE owns business config.
@@ -110,4 +118,3 @@ Python adapter may derive:
 - UI-friendly fields
 
 Those derived fields are outside the native v1 contract.
-

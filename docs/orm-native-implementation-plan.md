@@ -8,6 +8,11 @@ Target architecture:
 
 - `BE -> Python adapter -> Native core`
 
+Deployment decision now locked:
+
+- official flow uses native raw warp plus native ORM/grading
+- Python warp/prep remains a fallback verification path
+
 ## Phase 1
 
 Build native parity for core ORM logic only.
