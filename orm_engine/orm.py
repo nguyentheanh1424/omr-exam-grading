@@ -97,6 +97,7 @@ class CircleROI:
     r: int
     question: int
     option: int
+    selection_mode: str = "single"
 
     @staticmethod
     def from_dict(d: dict) -> "CircleROI":
@@ -106,6 +107,7 @@ class CircleROI:
             r=int(d["r"]),
             question=int(d["question"]),
             option=int(d["option"]),
+            selection_mode=str(d.get("selection_mode", "single")),
         )
 
 

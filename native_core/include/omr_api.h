@@ -78,6 +78,7 @@ typedef struct OMR_CircleROI {
     int32_t r;
     int32_t question;
     int32_t option;
+    int32_t selection_mode;
 } OMR_CircleROI;
 
 typedef struct OMR_MetadataField {

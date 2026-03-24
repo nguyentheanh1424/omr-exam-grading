@@ -46,6 +46,7 @@ class OMR_CircleROI(Structure):
         ("r", c_int32),
         ("question", c_int32),
         ("option", c_int32),
+        ("selection_mode", c_int32),
     ]
 
 
@@ -260,6 +261,7 @@ class NativeCoreClient:
                 r=roi.r,
                 question=roi.question,
                 option=roi.option,
+                selection_mode=roi.selection_mode,
             )
 
         answer_key_arr = (c_int32 * len(config.answer_key))(*config.answer_key)

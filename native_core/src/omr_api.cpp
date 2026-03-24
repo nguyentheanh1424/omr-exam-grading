@@ -278,6 +278,10 @@ bool validate_form(
             copy_error_message(err, "ROI option index out of range");
             return false;
         }
+        if (roi.selection_mode < 0 || roi.selection_mode > 1) {
+            copy_error_message(err, "ROI selection_mode is out of range");
+            return false;
+        }
 
         if (roi.cx - roi.r < 0 || roi.cx + roi.r >= roi_width_limit ||
             roi.cy - roi.r < 0 || roi.cy + roi.r >= roi_height_limit) {
@@ -982,6 +986,7 @@ int32_t omr_process(
                 bubble.r,
                 bubble.column,
                 bubble.row,
+                0,
             };
             const float s = bubble_score(working_image, roi, *grading_params);
             const size_t selection_idx =
