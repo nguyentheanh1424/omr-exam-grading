@@ -1,7 +1,7 @@
 import cv2 as cv
 import numpy as np
 
-from .config import WINDOWS_4PTS
+from .config import load_region_windows
 from .detector import detect_tags
 from .refine_idw_patch import refine_idw_patch
 from .binarize import binarize_patch_dual
@@ -25,7 +25,9 @@ def bbox_from_template(ids, layout, img_shape, margin=100):
     return x_min, y_min, x_max, y_max
 
 
-def refine_regions(template_img, layout, warped_src, windows=WINDOWS_4PTS, output=None, debug=False):
+def refine_regions(template_img, layout, warped_src, windows=None, output=None, debug=False):
+    if windows is None:
+        windows = load_region_windows()
     base = template_img.copy()
     gray = cv.cvtColor(warped_src, cv.COLOR_BGR2GRAY)
     dets = {d.id: d for d in detect_tags(gray)}

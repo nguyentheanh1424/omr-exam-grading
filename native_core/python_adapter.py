@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from orm_engine.orm import CircleROI, load_circle_rois
-from warp_engine.config import A4_PX, TEMPLATE_LAYOUT_FILE, WINDOWS_4PTS
+from warp_engine.config import A4_PX, TEMPLATE_LAYOUT_FILE, load_region_windows
 
 
 DEFAULT_CIRCLE_ROIS_JSON = "config/circle_rois.json"
@@ -33,6 +33,7 @@ class NativeCircleROI:
     r: int
     question: int
     option: int
+    selection_mode: int
 
 
 @dataclass(frozen=True)
@@ -96,9 +97,11 @@ def load_template_markers(path: str | Path = TEMPLATE_LAYOUT_FILE) -> tuple[Nati
 
 
 def build_region_windows(
-    windows_4pts: Iterable[Sequence[int]] = WINDOWS_4PTS,
+    windows_4pts: Iterable[Sequence[int]] | None = None,
     template_markers: Sequence[NativeMarkerTemplate] | None = None,
 ) -> tuple[NativeRegionWindow, ...]:
+    if windows_4pts is None:
+        windows_4pts = load_region_windows()
     marker_ids = {marker.marker_id for marker in template_markers or ()}
     windows: list[NativeRegionWindow] = []
 
@@ -173,6 +176,14 @@ def normalize_circle_rois(circle_rois: Sequence[CircleROI]) -> tuple[tuple[Nativ
             raise ValueError("ROI option indices must be >= 0")
         if roi.r <= 0:
             raise ValueError("ROI radius must be > 0")
+        selection_mode_raw = getattr(roi, "selection_mode", "single")
+        selection_mode_name = str(selection_mode_raw).strip().lower()
+        if selection_mode_name == "single":
+            selection_mode = 0
+        elif selection_mode_name == "multiple":
+            selection_mode = 1
+        else:
+            raise ValueError(f"unsupported ROI selection_mode: {selection_mode_raw!r}")
 
         native_question = roi.question - 1
         pair = (native_question, roi.option)
@@ -189,6 +200,7 @@ def normalize_circle_rois(circle_rois: Sequence[CircleROI]) -> tuple[tuple[Nativ
                 r=int(roi.r),
                 question=native_question,
                 option=int(roi.option),
+                selection_mode=selection_mode,
             )
         )
 
@@ -238,7 +250,7 @@ def build_native_adapter_config(
     answer_key_path: str | Path = DEFAULT_ANSWER_KEY_JSON,
     template_layout_path: str | Path = TEMPLATE_LAYOUT_FILE,
     output_size: tuple[int, int] = A4_PX,
-    windows_4pts: Iterable[Sequence[int]] = WINDOWS_4PTS,
+    windows_4pts: Iterable[Sequence[int]] | None = None,
 ) -> NativeAdapterConfig:
     python_rois = load_circle_rois(str(_resolve_repo_path(circle_rois_path)))
     native_rois, n_questions, n_options_per_question = normalize_circle_rois(python_rois)
