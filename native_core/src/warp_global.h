@@ -14,7 +14,8 @@ bool compute_global_h_from_markers(
     float ransac_thresh_px,
     int ransac_iterations,
     float out_h[9],
-    int32_t* out_inliers
+    int32_t* out_inliers,
+    int32_t debug_level = 0
 );
 
 bool warp_image_bilinear(

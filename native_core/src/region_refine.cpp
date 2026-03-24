@@ -7,7 +7,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <limits>
+#include <sstream>
 #include <unordered_map>
 #include <vector>
 
@@ -21,6 +23,12 @@ struct Pt2 {
     float x;
     float y;
 };
+
+float point_distance(const Pt2& a, const Pt2& b) {
+    const float dx = a.x - b.x;
+    const float dy = a.y - b.y;
+    return std::sqrt(dx * dx + dy * dy);
+}
 
 inline void copy_error(char* dst, size_t cap, const char* msg) {
     if (dst == nullptr || cap == 0) {
@@ -129,6 +137,71 @@ bool solve_linear(
     return true;
 }
 
+bool compute_normalization_transform(
+    const std::vector<Pt2>& points,
+    float out_t[9],
+    std::vector<Pt2>* out_normalized
+) {
+    if (out_t == nullptr || out_normalized == nullptr || points.empty()) {
+        return false;
+    }
+
+    double mean_x = 0.0;
+    double mean_y = 0.0;
+    for (const Pt2& p : points) {
+        mean_x += static_cast<double>(p.x);
+        mean_y += static_cast<double>(p.y);
+    }
+    mean_x /= static_cast<double>(points.size());
+    mean_y /= static_cast<double>(points.size());
+
+    double mean_dist = 0.0;
+    for (const Pt2& p : points) {
+        const double dx = static_cast<double>(p.x) - mean_x;
+        const double dy = static_cast<double>(p.y) - mean_y;
+        mean_dist += std::sqrt(dx * dx + dy * dy);
+    }
+    mean_dist /= static_cast<double>(points.size());
+    if (mean_dist < 1e-9) {
+        return false;
+    }
+
+    const double scale = std::sqrt(2.0) / mean_dist;
+    out_t[0] = static_cast<float>(scale);
+    out_t[1] = 0.0f;
+    out_t[2] = static_cast<float>(-scale * mean_x);
+    out_t[3] = 0.0f;
+    out_t[4] = static_cast<float>(scale);
+    out_t[5] = static_cast<float>(-scale * mean_y);
+    out_t[6] = 0.0f;
+    out_t[7] = 0.0f;
+    out_t[8] = 1.0f;
+
+    out_normalized->clear();
+    out_normalized->reserve(points.size());
+    for (const Pt2& p : points) {
+        out_normalized->push_back(
+            Pt2{
+                static_cast<float>(scale * (static_cast<double>(p.x) - mean_x)),
+                static_cast<float>(scale * (static_cast<double>(p.y) - mean_y)),
+            }
+        );
+    }
+    return true;
+}
+
+void multiply_3x3(const float a[9], const float b[9], float out[9]) {
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            double v = 0.0;
+            for (int k = 0; k < 3; ++k) {
+                v += static_cast<double>(a[r * 3 + k]) * static_cast<double>(b[k * 3 + c]);
+            }
+            out[r * 3 + c] = static_cast<float>(v);
+        }
+    }
+}
+
 bool estimate_homography(
     const std::vector<Pt2>& src,
     const std::vector<Pt2>& dst,
@@ -137,6 +210,15 @@ bool estimate_homography(
     if (out_h == nullptr || src.size() != dst.size() || src.size() < 4) {
         return false;
     }
+    std::vector<Pt2> src_norm;
+    std::vector<Pt2> dst_norm;
+    float t_src[9] = {0.0f};
+    float t_dst[9] = {0.0f};
+    if (!compute_normalization_transform(src, t_src, &src_norm) ||
+        !compute_normalization_transform(dst, t_dst, &dst_norm)) {
+        return false;
+    }
+
     std::vector<double> ata(64, 0.0);
     std::vector<double> atb(8, 0.0);
 
@@ -150,11 +232,11 @@ bool estimate_homography(
         }
     };
 
-    for (size_t i = 0; i < src.size(); ++i) {
-        const double x = src[i].x;
-        const double y = src[i].y;
-        const double u = dst[i].x;
-        const double v = dst[i].y;
+    for (size_t i = 0; i < src_norm.size(); ++i) {
+        const double x = src_norm[i].x;
+        const double y = src_norm[i].y;
+        const double u = dst_norm[i].x;
+        const double v = dst_norm[i].y;
         const std::array<double, 8> r1 = {x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y};
         const std::array<double, 8> r2 = {0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y};
         acc(r1, u);
@@ -165,15 +247,34 @@ bool estimate_homography(
     if (!solve_linear(&ata, &atb, 8, &x)) {
         return false;
     }
-    out_h[0] = static_cast<float>(x[0]);
-    out_h[1] = static_cast<float>(x[1]);
-    out_h[2] = static_cast<float>(x[2]);
-    out_h[3] = static_cast<float>(x[3]);
-    out_h[4] = static_cast<float>(x[4]);
-    out_h[5] = static_cast<float>(x[5]);
-    out_h[6] = static_cast<float>(x[6]);
-    out_h[7] = static_cast<float>(x[7]);
-    out_h[8] = 1.0f;
+    float h_norm[9] = {
+        static_cast<float>(x[0]),
+        static_cast<float>(x[1]),
+        static_cast<float>(x[2]),
+        static_cast<float>(x[3]),
+        static_cast<float>(x[4]),
+        static_cast<float>(x[5]),
+        static_cast<float>(x[6]),
+        static_cast<float>(x[7]),
+        1.0f,
+    };
+
+    float t_dst_inv[9] = {0.0f};
+    if (!invert_3x3(t_dst, t_dst_inv)) {
+        return false;
+    }
+
+    float tmp[9] = {0.0f};
+    multiply_3x3(t_dst_inv, h_norm, tmp);
+    multiply_3x3(tmp, t_src, out_h);
+
+    if (std::abs(out_h[8]) < 1e-9f) {
+        return false;
+    }
+    const float s = 1.0f / out_h[8];
+    for (int i = 0; i < 9; ++i) {
+        out_h[i] *= s;
+    }
     return true;
 }
 
@@ -248,6 +349,21 @@ float choose_residual_factor(const OMR_WarpParams& p, float max_residual) {
         return p.residual_factors[1];
     }
     return p.residual_factors[0];
+}
+
+float median_float(std::vector<float> values) {
+    if (values.empty()) {
+        return 0.0f;
+    }
+    const size_t mid = values.size() / 2u;
+    std::nth_element(values.begin(), values.begin() + static_cast<ptrdiff_t>(mid), values.end());
+    float med = values[mid];
+    if ((values.size() & 1u) == 0u) {
+        const size_t left_mid = mid - 1u;
+        std::nth_element(values.begin(), values.begin() + static_cast<ptrdiff_t>(left_mid), values.end());
+        med = 0.5f * (med + values[left_mid]);
+    }
+    return med;
 }
 
 uint8_t gray_from_patch_pixel(
@@ -466,6 +582,7 @@ bool refine_regions_local(
     const OMR_WarpParams& params,
     const OMR_BinarizeParams& bin_params,
     const float h_src_to_dst[9],
+    int32_t debug_level,
     std::vector<uint8_t>* out_storage,
     OMR_ImageView* out_view,
     char* err_message,
@@ -524,6 +641,13 @@ bool refine_regions_local(
         }
     }
 
+    std::ostringstream debug_json;
+    const bool emit_debug = debug_level > 0;
+    if (emit_debug) {
+        debug_json << "{\n  \"windows\": [\n";
+    }
+    bool first_window = true;
+
     for (int32_t wi = 0; wi < form.n_region_windows; ++wi) {
         const OMR_RegionWindow& win = form.region_windows[wi];
         std::vector<int32_t> usable_ids;
@@ -566,23 +690,48 @@ bool refine_regions_local(
 
         std::vector<Pt2> src_local;
         std::vector<Pt2> dst_local;
+        std::ostringstream marker_debug_json;
+        bool first_marker = true;
+        int local_marker_count = 0;
         src_local.reserve(usable_ids.size());
         dst_local.reserve(usable_ids.size());
         for (int32_t id : usable_ids) {
             const Pt2 global_s = src_after_global[id];
+            const Pt2 d = template_map[id];
             const auto local_it = src_after_local_detect.find(id);
             Pt2 s = global_s;
+            bool used_local = false;
+            const float global_residual = point_distance(global_s, d);
+            float local_residual = -1.0f;
+            float local_global_delta = -1.0f;
             if (local_it != src_after_local_detect.end()) {
-                const float dx = local_it->second.x - global_s.x;
-                const float dy = local_it->second.y - global_s.y;
-                const float dist = std::sqrt(dx * dx + dy * dy);
-                if (dist <= kMaxTrustedLocalMarkerDeltaPx) {
+                local_global_delta = point_distance(local_it->second, global_s);
+                local_residual = point_distance(local_it->second, d);
+                if (local_global_delta <= kMaxTrustedLocalMarkerDeltaPx &&
+                    local_residual <= global_residual) {
                     s = local_it->second;
+                    used_local = true;
                 }
             }
-            const Pt2 d = template_map[id];
+            if (used_local) {
+                ++local_marker_count;
+            }
             src_local.push_back(Pt2{s.x - static_cast<float>(x0), s.y - static_cast<float>(y0)});
             dst_local.push_back(Pt2{d.x - static_cast<float>(x0), d.y - static_cast<float>(y0)});
+            if (emit_debug) {
+                if (!first_marker) {
+                    marker_debug_json << ",\n";
+                }
+                first_marker = false;
+                marker_debug_json
+                    << "        {\n"
+                    << "          \"id\": " << id << ",\n"
+                    << "          \"used_source\": \"" << (used_local ? "local" : "global") << "\",\n"
+                    << "          \"global_residual\": " << global_residual << ",\n"
+                    << "          \"local_residual\": " << local_residual << ",\n"
+                    << "          \"local_global_delta\": " << local_global_delta << "\n"
+                    << "        }";
+            }
         }
 
         float h_local[9] = {0.0f};
@@ -595,13 +744,26 @@ bool refine_regions_local(
 
         std::vector<Pt2> src_est_after_h = dst_local;
         float max_res_before = 0.0f;
+        std::vector<float> residual_magnitudes;
+        residual_magnitudes.reserve(src_local.size());
         for (size_t i = 0; i < src_local.size(); ++i) {
             const float dx = src_local[i].x - dst_local[i].x;
             const float dy = src_local[i].y - dst_local[i].y;
-            max_res_before = std::max(max_res_before, std::sqrt(dx * dx + dy * dy));
+            const float residual = std::sqrt(dx * dx + dy * dy);
+            residual_magnitudes.push_back(residual);
+            max_res_before = std::max(max_res_before, residual);
         }
 
-        const float factor = choose_residual_factor(params, max_res_before);
+        const float median_res_before = median_float(residual_magnitudes);
+        const float base_factor = choose_residual_factor(params, max_res_before);
+        float factor = base_factor;
+        if (max_res_before > 1e-6f) {
+            const float spread_attenuation = std::clamp(median_res_before / max_res_before, 0.4f, 1.0f);
+            factor *= spread_attenuation;
+        }
+        if (local_marker_count <= 2 && max_res_before > 20.0f) {
+            factor *= 0.8f;
+        }
         float max_res_after = 0.0f;
         for (size_t i = 0; i < src_local.size(); ++i) {
             const float dx = (src_local[i].x - dst_local[i].x) * factor;
@@ -632,6 +794,39 @@ bool refine_regions_local(
         const std::vector<uint8_t> ink_mask =
             binarize_patch_dual_like_python(patch_refined, pw, ph, work.channels, bin_params);
 
+        size_t ink_pixels = 0;
+        for (uint8_t v : ink_mask) {
+            if (v != 0u) {
+                ++ink_pixels;
+            }
+        }
+        const float ink_ratio = ink_mask.empty()
+            ? 0.0f
+            : static_cast<float>(ink_pixels) / static_cast<float>(ink_mask.size());
+
+        if (emit_debug) {
+            if (!first_window) {
+                debug_json << ",\n";
+            }
+            first_window = false;
+            debug_json
+                << "    {\n"
+                << "      \"window_index\": " << wi << ",\n"
+                << "      \"usable_marker_count\": " << usable_ids.size() << ",\n"
+                << "      \"local_marker_count\": " << local_marker_count << ",\n"
+                << "      \"bbox\": [" << x0 << ", " << y0 << ", " << x1 << ", " << y1 << "],\n"
+                << "      \"max_residual_before\": " << max_res_before << ",\n"
+                << "      \"median_residual_before\": " << median_res_before << ",\n"
+                << "      \"max_residual_after\": " << max_res_after << ",\n"
+                << "      \"base_residual_factor\": " << base_factor << ",\n"
+                << "      \"residual_factor\": " << factor << ",\n"
+                << "      \"ink_ratio\": " << ink_ratio << ",\n"
+                << "      \"markers\": [\n"
+                << marker_debug_json.str() << "\n"
+                << "      ]\n"
+                << "    }";
+        }
+
         for (int y = 0; y < ph; ++y) {
             uint8_t* dst_row = out_storage->data() +
                 static_cast<size_t>(y0 + y) * static_cast<size_t>(work.stride) +
@@ -652,6 +847,13 @@ bool refine_regions_local(
     out_view->stride = work.stride;
     out_view->channels = work.channels;
     out_view->data = out_storage->data();
+    if (emit_debug) {
+        debug_json << "\n  ]\n}\n";
+        std::ofstream file("results/native_region_debug/region_refine_debug.json", std::ios::binary);
+        if (file.is_open()) {
+            file << debug_json.str();
+        }
+    }
     copy_error(err_message, err_cap, "");
     return true;
 }

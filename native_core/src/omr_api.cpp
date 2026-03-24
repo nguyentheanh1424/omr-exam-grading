@@ -832,7 +832,8 @@ int32_t omr_process(
                 warp_params->global_h_ransac_thresh,
                 300,
                 h_src_to_dst,
-                &inliers)) {
+                &inliers,
+                runtime_options->debug_level)) {
             return set_error(
                 out_result,
                 OMR_ERR_INSUFFICIENT_MARKERS,
@@ -880,6 +881,7 @@ int32_t omr_process(
                     *warp_params,
                     *bin_params,
                     h_src_to_dst,
+                    runtime_options->debug_level,
                     &region_storage,
                     &region_view,
                     out_result->error_message,

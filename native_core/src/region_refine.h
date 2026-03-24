@@ -15,6 +15,7 @@ bool refine_regions_local(
     const OMR_WarpParams& params,
     const OMR_BinarizeParams& bin_params,
     const float h_src_to_dst[9],
+    int32_t debug_level,
     std::vector<uint8_t>* out_storage,
     OMR_ImageView* out_view,
     char* err_message,
